@@ -36,7 +36,7 @@ def display_page(pathname):
                 style_table={'marginBottom': '20px', 'width': '90%', 'margin': 'auto'}
             ),
             html.Button("Save Changes", id={'type': 'save-changes-btn', 'index': 'power-plants'}, n_clicks=0, className='btn btn-primary my-4')
-        ])
+    ])
     elif pathname == '/editor/buses':
         buses_df = load_data(DATABASE_PATH)[1]
         tab_content = html.Div([

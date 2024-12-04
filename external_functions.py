@@ -20,6 +20,7 @@ def load_data(DATABASE_PATH):
     return power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df 
 
 def save_data(DATABASE_PATH, table_name, df):
+    # Saves the provided dataframe 'df' into the table 'table_name' in the database located at DATABASE_PATH
     conn = connect_to_db(DATABASE_PATH)
     df.to_sql(table_name, conn, if_exists='replace', index=False)
     conn.commit()
@@ -40,12 +41,24 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
     for _, row in power_plants_df.iterrows():
         bus_name = buses_df.loc[buses_df['id'] == int(row['bus_id']), 'name']
         if not bus_name.empty:
+            p_nom_max = row["capacity_mw"]
+
+            # Apply the generation profile if applicable
+            if row['type'] == 'Solar':
+                profile = solar_profile_df[solar_profile_df['profile'] == row['profile']].set_index('snapshot_time')['solar_profile']
+            elif row['type'] == 'Wind':
+                profile = wind_profile_df[wind_profile_df['profile'] == row['profile']].set_index('snapshot_time')['wind_profile']
+            else:
+                profile = None
+
+            # Add generator to the network
             network.add(
                 "Generator",
                 row["name"],
                 bus=bus_name.values[0],
-                p_nom=1e6 if pd.isna(row["capacity_mw"]) else row["capacity_mw"],
-                marginal_cost=1e6 if pd.isna(row["srmc"]) else row["srmc"],
+                p_nom=p_nom_max,
+                p_max_pu=profile if profile is not None else 1.0,  # Apply the solar/wind profile constraint
+                marginal_cost=row["srmc"],
                 overwrite=True
             )
         else:

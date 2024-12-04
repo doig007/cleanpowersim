@@ -12,9 +12,11 @@ CREATE TABLE IF NOT EXISTS power_plants (
     capacity_mw REAL NOT NULL,
     bus_id INTEGER NOT NULL,
     type TEXT NOT NULL,
-    srmc REAL NOT NULL
+    srmc REAL NOT NULL,
+    profile TEXT
 )
 ''')
+
 
 # Step 3: Create the Buses table (now with longitude and latitude)
 cursor.execute('''
@@ -73,8 +75,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
 )
 ''')
 
-
-# Step 7: Create the Wind and Solar profile table
+# Step 8: Create the Wind and Solar profile tables
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS wind_profile (
     id INTEGER PRIMARY KEY,
@@ -93,9 +94,7 @@ CREATE TABLE IF NOT EXISTS solar_profile (
 )
 ''')
 
-
-
-# Step 8: Insert initial data into the Buses table (with longitude and latitude)
+# Step 9: Insert initial data into the Buses table (with longitude and latitude)
 buses_data = [
     (1, "Bus A", 110, -79.3832, 43.6532),
     (2, "Bus B", 220, -80.2453, 42.3151),
@@ -106,18 +105,18 @@ INSERT OR IGNORE INTO buses (id, name, voltage_kv, longitude, latitude)
 VALUES (?, ?, ?, ?, ?)
 ''', buses_data)
 
-# Step 9: Insert initial data into the Power Plants table
+# Step 10: Insert initial data into the Power Plants table
 power_plants_data = [
-    (1, "Plant 1", 100, 1, "Solar", 15),
-    (2, "Plant 2", 200, 2, "Wind", 10),
-    (3, "Plant 3", 150, 3, "Hydro", 20)
+    (1, "Plant 1", 100, 1, "Solar", 15, "Solar A"),
+    (2, "Plant 2", 200, 2, "Wind", 10, "Wind A"),
+    (3, "Plant 3", 150, 3, "Hydro", 20, None)
 ]
 cursor.executemany('''
-INSERT OR IGNORE INTO power_plants (id, name, capacity_mw, bus_id, type, srmc)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT OR IGNORE INTO power_plants (id, name, capacity_mw, bus_id, type, srmc, profile)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ''', power_plants_data)
 
-# Step 10: Insert initial data into the Transmission Lines table
+# Step 11: Insert initial data into the Transmission Lines table
 lines_data = [
     (1, "Line 1", 1, 2, 50, 100, 0.01, 0.02),
     (2, "Line 2", 2, 3, 75, 150, 0.015, 0.025)
@@ -144,7 +143,7 @@ INSERT OR IGNORE INTO demand_profile (id, bus_id, demand_mw, snapshot)
 VALUES (?, ?, ?, ?)
 ''', demand_data)
 
-# Step 12: Insert initial data into the Storage Units table
+# Step 13: Insert initial data into the Storage Units table
 storage_units_data = [
     (1, "Storage 1", 50, 200, 1, 0.9, "Battery"),
     (2, "Storage 2", 100, 400, 2, 0.85, "Pumped Hydro"),
@@ -155,7 +154,7 @@ INSERT OR IGNORE INTO storage_units (id, name, capacity_mw, max_energy_mwh, bus_
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ''', storage_units_data)
 
-# Step 13: Insert initial data into the Snapshots table
+# Step 14: Insert initial data into the Snapshots table
 snapshots_data = [
     (1, "2024-01-01 00:00:00", 1.0),
     (2, "2024-01-01 01:00:00", 1.0),
@@ -166,7 +165,34 @@ INSERT OR IGNORE INTO snapshots (id, snapshot_time, weight)
 VALUES (?, ?, ?)
 ''', snapshots_data)
 
-# Step 12: Commit changes and close the connection
+# Step 15: Insert dummy data into the Wind and Solar profile tables
+wind_profiles_data = [
+    (1, "Wind A", "2024-01-01 00:00:00", 0.8),
+    (2, "Wind A", "2024-01-01 01:00:00", 0.85),
+    (3, "Wind A", "2024-01-01 02:00:00", 0.9),
+    (4, "Wind B", "2024-01-01 00:00:00", 0.7),
+    (5, "Wind B", "2024-01-01 01:00:00", 0.75),
+    (6, "Wind B", "2024-01-01 02:00:00", 0.8)
+]
+cursor.executemany('''
+INSERT OR IGNORE INTO wind_profile (id, profile, snapshot_time, wind_profile)
+VALUES (?, ?, ?, ?)
+''', wind_profiles_data)
+
+solar_profiles_data = [
+    (1, "Solar A", "2024-01-01 00:00:00", 0.9),
+    (2, "Solar A", "2024-01-01 01:00:00", 0.95),
+    (3, "Solar A", "2024-01-01 02:00:00", 1.0),
+    (4, "Solar B", "2024-01-01 00:00:00", 0.85),
+    (5, "Solar B", "2024-01-01 01:00:00", 0.9),
+    (6, "Solar B", "2024-01-01 02:00:00", 0.95)
+]
+cursor.executemany('''
+INSERT OR IGNORE INTO solar_profile (id, profile, snapshot_time, solar_profile)
+VALUES (?, ?, ?, ?)
+''', solar_profiles_data)
+
+# Step 16: Commit changes and close the connection
 conn.commit()
 conn.close()
 

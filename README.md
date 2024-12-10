@@ -1,4 +1,4 @@
-# cleanpowersim Clean Power System Simulation Web Application
+# Clean Power System Simulation Web Application (cleanpowersim)
 
 ## Overview
 This project is an interactive web application designed to simulate power systems, specifically focused on renewable energy sources such as wind and solar. The application allows users to modify system parameters, view a network diagram, run optimization models, and view the results of these simulations. The app is built using Python, Dash, and PyPSA (Python for Power System Analysis).

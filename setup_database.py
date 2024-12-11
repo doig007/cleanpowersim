@@ -79,18 +79,18 @@ CREATE TABLE IF NOT EXISTS snapshots (
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS wind_profile (
     id INTEGER PRIMARY KEY,
-    profile TEXT NOT NULL,
+    profile_name TEXT NOT NULL,
     snapshot_time TEXT NOT NULL,
-    wind_profile REAL NOT NULL DEFAULT 1.0
+    profile REAL NOT NULL DEFAULT 1.0
 )
 ''')
 
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS solar_profile (
     id INTEGER PRIMARY KEY,
-    profile TEXT NOT NULL,
+    profile_name TEXT NOT NULL,
     snapshot_time TEXT NOT NULL,
-    solar_profile REAL NOT NULL DEFAULT 1.0
+    profile REAL NOT NULL DEFAULT 1.0
 )
 ''')
 
@@ -175,7 +175,7 @@ wind_profiles_data = [
     (6, "Wind B", "2024-01-01 02:00:00", 0.8)
 ]
 cursor.executemany('''
-INSERT OR IGNORE INTO wind_profile (id, profile, snapshot_time, wind_profile)
+INSERT OR IGNORE INTO wind_profile (id, profile_name, snapshot_time, profile)
 VALUES (?, ?, ?, ?)
 ''', wind_profiles_data)
 
@@ -188,7 +188,7 @@ solar_profiles_data = [
     (6, "Solar B", "2024-01-01 02:00:00", 0.95)
 ]
 cursor.executemany('''
-INSERT OR IGNORE INTO solar_profile (id, profile, snapshot_time, solar_profile)
+INSERT OR IGNORE INTO solar_profile (id, profile_name, snapshot_time, profile)
 VALUES (?, ?, ?, ?)
 ''', solar_profiles_data)
 

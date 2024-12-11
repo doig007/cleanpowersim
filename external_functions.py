@@ -30,7 +30,13 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
     network = pypsa.Network()  # Create a PyPSA Network
 
     # Add snapshots to the network
-    network.set_snapshots(snapshots_df.loc[:,'snapshot_time'])
+    network.set_snapshots(pd.to_datetime(snapshots_df['snapshot_time'], dayfirst=True))
+
+    solar_profile_df.index = pd.to_datetime(solar_profile_df.index, dayfirst=True)
+    wind_profile_df.index = pd.to_datetime(wind_profile_df.index, dayfirst=True)
+
+    solar_profile_df['snapshot_time'] = pd.to_datetime(solar_profile_df['snapshot_time'], errors='coerce', dayfirst=True)
+    wind_profile_df['snapshot_time'] = pd.to_datetime(wind_profile_df['snapshot_time'], errors='coerce', dayfirst=True)
 
     # Add buses to the network
     for _, row in buses_df.iterrows():
@@ -43,13 +49,20 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
         if not bus_name.empty:
             p_nom_max = row["capacity_mw"]
 
-            # Apply the generation profile if applicable
+            # Determine the generation profile
             if row['type'] == 'Solar':
-                profile = solar_profile_df[solar_profile_df['profile'] == row['profile']].set_index('snapshot_time')['solar_profile']
+                filtered_df = solar_profile_df[solar_profile_df['profile'] == row['profile']]
             elif row['type'] == 'Wind':
-                profile = wind_profile_df[wind_profile_df['profile'] == row['profile']].set_index('snapshot_time')['wind_profile']
+                filtered_df = wind_profile_df[wind_profile_df['profile'] == row['profile']]
             else:
-                profile = None
+                filtered_df = pd.DataFrame()
+
+            # Validate and set the profile
+            if not filtered_df.empty and 'snapshot_time' in filtered_df.columns:
+                profile = filtered_df.set_index('snapshot_time')['profile']
+                profile = profile.reindex(network.snapshots).fillna(1)  # Align with network snapshots
+            else:
+                profile = pd.Series(1.0, index=network.snapshots)
 
             # Add generator to the network
             network.add(
@@ -57,12 +70,13 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
                 row["name"],
                 bus=bus_name.values[0],
                 p_nom=p_nom_max,
-                p_max_pu=profile if profile is not None else 1.0,  # Apply the solar/wind profile constraint
+                p_max_pu=profile,
                 marginal_cost=row["srmc"],
                 overwrite=True
             )
         else:
             print(f"Warning: Bus ID {row['bus_id']} for generator {row['name']} not found in buses_df.")
+
 
     # Add storage units to the network
     for _, row in storage_units_df.iterrows():
@@ -103,6 +117,13 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
     # Add demand as loads to the network (now including snapshot timestamp)
     demand_timeseries = demand_df.pivot(index='snapshot', columns='bus_id', values='demand_mw')
 
+    # Ensure snapshot alignment
+    demand_timeseries.index = pd.to_datetime(demand_timeseries.index, dayfirst=True)
+    network.snapshots = pd.to_datetime(network.snapshots, dayfirst=True)
+
+    # Reindex demand data to match network snapshots
+    demand_timeseries = demand_timeseries.reindex(network.snapshots).fillna(0)
+
     # Iterate over each bus to add the time series demand data as loads to the network
     for bus_id in demand_timeseries.columns:
         bus_name = buses_df.loc[buses_df['id'] == bus_id, 'name'].values[0]
@@ -134,9 +155,6 @@ def get_network_elements(network):
     nodes_data = []
     edges_data = []
 
-    # Scaling factor for better visualization
-    scaling_factor = 100  # Adjust this to scale latitude/longitude appropriately for visualization
-
     # Buses
     for bus_id, bus in network.buses.iterrows():
         nodes_data.append({
@@ -146,25 +164,26 @@ def get_network_elements(network):
                 'type': 'bus'
             },
             'position': {
-                'x': bus['longitude'] * scaling_factor,
-                'y': bus['latitude'] * scaling_factor
+                'x': bus['longitude'],
+                'y': bus['latitude']
             }
         })
 
     # Generators
-    offset_distance = 20  # Distance from bus for placing generators and storage
     for gen_id, gen in network.generators.iterrows():
         bus = network.buses.loc[gen['bus']]
+        size = max(10, min(50, gen['p_nom'] / 100))  # Scale capacity between 10 and 50
         nodes_data.append({
             'data': {
                 'id': gen_id,
                 'label': f'{gen_id}({gen["p_nom"]:.0f}MW)',
                 'type': 'generator',
-                'capacity': gen['p_nom']
+                'capacity': gen['p_nom'],
+                'size': size
             },
             'position': {
-                'x': (bus['longitude'] * scaling_factor) + offset_distance,
-                'y': (bus['latitude'] * scaling_factor) + offset_distance
+                'x': (bus['longitude']),
+                'y': (bus['latitude'])
             }
         })
         # Add an edge connecting generator to its bus
@@ -176,10 +195,8 @@ def get_network_elements(network):
                 'edgeType': 'secondary'
             }
         })
-        offset_distance *= -1  # Alternate the direction of the offset
 
     # Storage Units
-    offset_distance = 30
     for storage_id, storage in network.storage_units.iterrows():
         bus = network.buses.loc[storage['bus']]
         nodes_data.append({
@@ -190,8 +207,8 @@ def get_network_elements(network):
                 'capacity': storage['p_nom']
             },
             'position': {
-                'x': (bus['longitude'] * scaling_factor) + offset_distance,
-                'y': (bus['latitude'] * scaling_factor) - offset_distance
+                'x': (bus['longitude']),
+                'y': (bus['latitude'])
             }
         })
         # Add an edge connecting storage to its bus
@@ -203,7 +220,6 @@ def get_network_elements(network):
                 'edgeType': 'secondary'
             }
         })
-        offset_distance *= -1  # Alternate the direction of the offset
 
     # Edges (Lines)
     for line_id, line in network.lines.iterrows():

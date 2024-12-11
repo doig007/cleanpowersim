@@ -32,8 +32,8 @@ power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, 
 # Step 3: Initialize Dash app with Bootstrap stylesheet
 app = dash.Dash(__name__, external_stylesheets=[
     dbc.themes.BOOTSTRAP,
-    "https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.8.1/font/bootstrap-icons.min.css"
-], suppress_callback_exceptions=True)
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+])
 
 app.title = 'Clean Power Sim'
 app._favicon = ("assets/favicon.ico")
@@ -257,9 +257,9 @@ def upload_network_data(n_clicks, contents, filename):
             power_plants_df = pd.read_excel(xls, 'Power Plants')
             buses_df = pd.read_excel(xls, 'Buses')
             lines_df = pd.read_excel(xls, 'Transmission Lines')
-            demand_df = pd.read_excel(xls, 'Demand Profile')
+            demand_df = pd.read_excel(xls, 'Demand Profile', parse_dates=['snapshot'])
             storage_units_df = pd.read_excel(xls, 'Storage Units')
-            snapshots_df = pd.read_excel(xls, 'Snapshots')
+            snapshots_df = pd.read_excel(xls, 'Snapshots', parse_dates=['snapshot_time'])
             wind_profile_df = pd.read_excel(xls, 'Wind Profile')
             solar_profile_df = pd.read_excel(xls, 'Solar Profile')
 
@@ -282,6 +282,39 @@ def upload_network_data(n_clicks, contents, filename):
         os.remove(temp_file_path)
 
     return 1  # Signal that the save was successful
+
+
+@app.callback(
+    Output('network-graph', 'zoom'),
+    [Input('zoom-in', 'n_clicks'),
+     Input('zoom-out', 'n_clicks'),
+     Input('fit', 'n_clicks')],
+    State('network-graph', 'zoom')
+)
+def adjust_zoom(zoom_in, zoom_out, fit, current_zoom):
+    ctx = dash.callback_context
+
+    if not ctx.triggered:
+        raise PreventUpdate
+
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    if triggered_id == 'zoom-in':
+        return min(current_zoom + 0.2, 3)  # Increase zoom, cap at maxZoom
+    elif triggered_id == 'zoom-out':
+        return max(current_zoom - 0.2, 0.5)  # Decrease zoom, cap at minZoom
+    elif triggered_id == 'fit':
+        # Use a specific fit function if desired
+        return 1  # Reset zoom to default
+    return current_zoom
+
+
+
+
+
+
+
+
+
 
 
 

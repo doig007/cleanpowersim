@@ -128,11 +128,23 @@ def display_page(pathname):
         # Create a network graph using cytoscape
         tab_content = html.Div([
             html.H2("Network Diagram", className='text-center my-4'),
+            dbc.ButtonGroup([
+                dbc.Button(html.I(className="fas fa-search-plus fa-lg"), id="zoom-in", color="secondary"),
+                dbc.Button(html.I(className="fas fa-search-minus fa-lg"), id="zoom-out", color="primary"),
+                dbc.Button(html.I(className="fas fa-compress-arrows-alt fa-lg"), id="fit", color="primary")
+            ],
+            className="d-flex justify-content-center my-2"
+            ),
             cyto.Cytoscape(
                 id='network-graph',
                 elements=get_network_elements(network),
                 style={'width': '100%', 'height': '600px'},
-                layout={'name': 'preset'},
+                layout={'name': 'cose'},
+                zoom=1,  # Initial zoom level
+                minZoom=0.5,  # Minimum zoom level
+                maxZoom=3,  # Maximum zoom level
+                userZoomingEnabled=True,  # Enable user-controlled zooming
+                userPanningEnabled=True,  # Enable panning
                 stylesheet=cytoscape_styles
             )
         ])

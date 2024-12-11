@@ -19,8 +19,8 @@ cytoscape_styles=[
                         'style': {
                             'label': 'data(label)',
                             'shape': 'square',
-                            'width': '5px',
-                            'height': '5px',
+                            'width': 'mapData(size, 10, 50, 10, 50)',  # Map size attribute to width
+                            'height': 'mapData(size, 10, 50, 10, 50)',
                             'background-color': '#FF4136',
                             'text-valign': 'top',
                             'text-halign': 'center',

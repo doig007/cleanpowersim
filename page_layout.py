@@ -1,9 +1,8 @@
 import dash_bootstrap_components as dbc
-from dash import html, dcc, dash_table, Input, Output, State
-import dash_cytoscape as cyto
+from dash import html, dcc, dash_table
 import pandas as pd
 import plotly.graph_objects as go
-from external_functions import load_data, create_network, get_network_elements
+from external_functions import load_data, create_diagram_tab
 from network_styles import cytoscape_styles  # Import the external stylesheet
 
 DATABASE_PATH = 'power_system.db'
@@ -122,32 +121,7 @@ def display_page(pathname):
             html.Button("Save Changes", id={'type': 'save-changes-btn', 'index': 'solar-profile'}, n_clicks=0, className='btn btn-primary my-4')
         ])
     elif pathname == '/diagram':
-        power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df = load_data(DATABASE_PATH)    # Reload the data from the database
-        network = create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df)
-
-        # Create a network graph using cytoscape
-        tab_content = html.Div([
-            html.H2("Network Diagram", className='text-center my-4'),
-            dbc.ButtonGroup([
-                dbc.Button(html.I(className="fas fa-search-plus fa-lg"), id="zoom-in", color="secondary"),
-                dbc.Button(html.I(className="fas fa-search-minus fa-lg"), id="zoom-out", color="primary"),
-                dbc.Button(html.I(className="fas fa-compress-arrows-alt fa-lg"), id="fit", color="primary")
-            ],
-            className="d-flex justify-content-center my-2"
-            ),
-            cyto.Cytoscape(
-                id='network-graph',
-                elements=get_network_elements(network),
-                style={'width': '100%', 'height': '600px'},
-                layout={'name': 'cose'},
-                zoom=1,  # Initial zoom level
-                minZoom=0.5,  # Minimum zoom level
-                maxZoom=3,  # Maximum zoom level
-                userZoomingEnabled=True,  # Enable user-controlled zooming
-                userPanningEnabled=True,  # Enable panning
-                stylesheet=cytoscape_styles
-            )
-        ])
+        tab_content = create_diagram_tab(DATABASE_PATH)
     
     elif pathname == '/settings':
         snapshots_df = load_data(DATABASE_PATH)[5]

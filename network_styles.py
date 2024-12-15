@@ -17,10 +17,10 @@ cytoscape_styles=[
                     {
                         'selector': '[type = "generator"]',
                         'style': {
-                            'label': 'data(label)',
+                            'label': '',    # Hide labels by default
                             'shape': 'square',
-                            'width': 'mapData(size, 10, 50, 10, 50)',  # Map size attribute to width
-                            'height': 'mapData(size, 10, 50, 10, 50)',
+                            'width': 'mapData(size, 1, 30, 1, 30)',  # Map size attribute to width
+                            'height': 'mapData(size, 1, 30, 1, 30)',
                             'background-color': '#FF4136',
                             'text-valign': 'top',
                             'text-halign': 'center',
@@ -32,7 +32,7 @@ cytoscape_styles=[
                     {
                         'selector': '[type = "storage"]',
                         'style': {
-                            'label': 'data(label)',
+                            'label': '',
                             'shape': 'pentagon',
                             'width': '5px',
                             'height': '5px',
@@ -47,7 +47,7 @@ cytoscape_styles=[
                     {
                         'selector': 'edge',
                         'style': {
-                            'line-color': '#FF4136',
+                            'line-color': '#000000',
                             'width': 2,
                             'curve-style': 'bezier',
                             'label': 'data(label)',
@@ -64,4 +64,4 @@ cytoscape_styles=[
                             'curve-style': 'bezier'
                         }
                     }
-                ]
+]

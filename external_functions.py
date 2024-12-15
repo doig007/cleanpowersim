@@ -1,7 +1,14 @@
+from dash import html, Input, Output, MATCH, clientside_callback
+import dash_bootstrap_components as dbc
+import dash_cytoscape as cyto
+
 import pypsa
 import pandas as pd
 import numpy as np
 import sqlite3
+import json
+
+from network_styles import cytoscape_styles  # Import the external stylesheet
 
 def connect_to_db(DATABASE_PATH):
     return sqlite3.connect(DATABASE_PATH)
@@ -172,11 +179,11 @@ def get_network_elements(network):
     # Generators
     for gen_id, gen in network.generators.iterrows():
         bus = network.buses.loc[gen['bus']]
-        size = max(10, min(50, gen['p_nom'] / 100))  # Scale capacity between 10 and 50
+        size = max(1, min(50, gen['p_nom'] / 100))  # Scale capacity between 1 and 50
         nodes_data.append({
             'data': {
                 'id': gen_id,
-                'label': f'{gen_id}({gen["p_nom"]:.0f}MW)',
+                'label': f'{gen_id}({gen["p_nom"]:.0f}MW)',   # Tooltip content
                 'type': 'generator',
                 'capacity': gen['p_nom'],
                 'size': size
@@ -235,3 +242,45 @@ def get_network_elements(network):
         })
 
     return nodes_data + edges_data
+
+def create_diagram_tab(DATABASE_PATH):
+
+    power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df = load_data(DATABASE_PATH)    # Reload the data from the database
+    network = create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df)
+    elements = get_network_elements(network)
+
+    graph_id = 'network-graph-diagram'
+
+    tab_content = html.Div([
+            html.H2("Network Diagram", className='text-center my-4'),
+            dbc.ButtonGroup(
+                [
+                    dbc.Button(html.I(className="bi bi-zoom-in"), id={'type': 'zoom-button', 'index': 'zoom-in'}, color="primary"),
+                    dbc.Button(html.I(className="bi bi-zoom-out"), id={'type': 'zoom-button', 'index': 'zoom-out'}, color="primary"),
+                    dbc.Button(html.I(className="bi bi-arrows-fullscreen"), id={'type': 'zoom-button', 'index': 'fit'}, color="primary")
+                ],
+                className="d-flex justify-content-center my-2"
+            ),
+            html.Div(
+                cyto.Cytoscape(
+                    id=graph_id,
+                    elements=elements,
+                    style={'width': '100%', 'height': '600px'},
+                    layout={'name': 'cose'},
+                    zoom=1,
+                    minZoom=0.5,
+                    maxZoom=3,
+                    userZoomingEnabled=True,
+                    userPanningEnabled=True,
+                    stylesheet=cytoscape_styles,
+                    autoungrabify=True
+                ),
+                # Add data attributes for javascript access
+                **{'data-elements': json.dumps(elements), 'data-stylesheet': json.dumps(cytoscape_styles)}
+            ),
+            html.Div(id='tooltip', style={'display': 'none', 'position': 'absolute', 'z-index': '1000'})
+    ])
+
+    return tab_content
+
+    

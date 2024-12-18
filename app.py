@@ -3,6 +3,7 @@ from dash import dcc, html, Input, Output, State, MATCH, ALL, ctx
 from dash import dash_table
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
+from dash.dependencies import ClientsideFunction
 
 import pandas as pd
 import pypsa
@@ -30,10 +31,13 @@ DATABASE_PATH = 'power_system.db'
 power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df = load_data(DATABASE_PATH)
 
 # Step 3: Initialize Dash app with Bootstrap stylesheet
-app = dash.Dash(__name__, external_stylesheets=[
-    dbc.themes.BOOTSTRAP,
-    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
-])
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[
+        dbc.themes.BOOTSTRAP,
+        "https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.8.1/font/bootstrap-icons.min.css"
+    ]
+)
 
 app.title = 'Clean Power Sim'
 app._favicon = ("assets/favicon.ico")
@@ -127,10 +131,7 @@ def handle_results_page(page_ready, optimization_intent, optimization_results, p
             try:
                 power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df  = load_data(DATABASE_PATH)
                 network = create_network(power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df)
-              
-                #model = network.optimize.create_model()
-                #model.to_file('c:/Temp/model.lp','lp')
-            
+                         
                 # Run optimization using PyPSA's optimize method
                 network.optimize(solver_name='cplex')
 
@@ -284,38 +285,40 @@ def upload_network_data(n_clicks, contents, filename):
     return 1  # Signal that the save was successful
 
 
-@app.callback(
-    Output('network-graph', 'zoom'),
-    [Input('zoom-in', 'n_clicks'),
-     Input('zoom-out', 'n_clicks'),
-     Input('fit', 'n_clicks')],
-    State('network-graph', 'zoom')
+# Clientside callback to handle drawing network diagram
+app.clientside_callback(
+    ClientsideFunction(
+        namespace='clientside',
+        function_name='createMap'
+    ),
+    Output('d3-container', 'children'),
+    Input('network-data', 'data')
 )
-def adjust_zoom(zoom_in, zoom_out, fit, current_zoom):
-    ctx = dash.callback_context
-
-    if not ctx.triggered:
-        raise PreventUpdate
-
-    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    if triggered_id == 'zoom-in':
-        return min(current_zoom + 0.2, 3)  # Increase zoom, cap at maxZoom
-    elif triggered_id == 'zoom-out':
-        return max(current_zoom - 0.2, 0.5)  # Decrease zoom, cap at minZoom
-    elif triggered_id == 'fit':
-        # Use a specific fit function if desired
-        return 1  # Reset zoom to default
-    return current_zoom
 
 
 
-
-
-
-
-
-
-
+#@app.callback(
+#    Output('network-graph', 'zoom'),
+#    [Input('zoom-in', 'n_clicks'),
+#     Input('zoom-out', 'n_clicks'),
+#     Input('fit', 'n_clicks')],
+#    State('network-graph', 'zoom')
+#)
+#def adjust_zoom(zoom_in, zoom_out, fit, current_zoom):
+#    ctx = dash.callback_context
+#
+#    if not ctx.triggered:
+#        raise PreventUpdate
+#
+#    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
+#    if triggered_id == 'zoom-in':
+#        return min(current_zoom + 0.2, 3)  # Increase zoom, cap at maxZoom
+#    elif triggered_id == 'zoom-out':
+#        return max(current_zoom - 0.2, 0.5)  # Decrease zoom, cap at minZoom
+#    elif triggered_id == 'fit':
+#        # Use a specific fit function if desired
+#        return 1  # Reset zoom to default
+#    return current_zoom
 
 
 if __name__ == '__main__':

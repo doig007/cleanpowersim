@@ -1,10 +1,9 @@
 import dash_bootstrap_components as dbc
 from dash import html, dcc, dash_table, Input, Output, State
-import dash_cytoscape as cyto
 import pandas as pd
+import json
 import plotly.graph_objects as go
 from external_functions import load_data, create_network, get_network_elements
-from network_styles import cytoscape_styles  # Import the external stylesheet
 
 DATABASE_PATH = 'power_system.db'
 
@@ -124,10 +123,13 @@ def display_page(pathname):
     elif pathname == '/diagram':
         power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df = load_data(DATABASE_PATH)    # Reload the data from the database
         network = create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df)
+        network_data = get_network_elements(network)
 
-        # Create a network graph using cytoscape
+        # Create a network graph using D3
         tab_content = html.Div([
             html.H2("Network Diagram", className='text-center my-4'),
+            dcc.Store(id="network-data", storage_type='memory', data=network_data),
+            html.Script(src='/assets/network_diagram.js'),
             dbc.ButtonGroup([
                 dbc.Button(html.I(className="fas fa-search-plus fa-lg"), id="zoom-in", color="secondary"),
                 dbc.Button(html.I(className="fas fa-search-minus fa-lg"), id="zoom-out", color="primary"),
@@ -135,17 +137,9 @@ def display_page(pathname):
             ],
             className="d-flex justify-content-center my-2"
             ),
-            cyto.Cytoscape(
-                id='network-graph',
-                elements=get_network_elements(network),
-                style={'width': '100%', 'height': '600px'},
-                layout={'name': 'cose'},
-                zoom=1,  # Initial zoom level
-                minZoom=0.5,  # Minimum zoom level
-                maxZoom=3,  # Maximum zoom level
-                userZoomingEnabled=True,  # Enable user-controlled zooming
-                userPanningEnabled=True,  # Enable panning
-                stylesheet=cytoscape_styles
+            html.Div(
+                id="d3-container",
+                style={"width": "100%", "height": "600px"},
             )
         ])
     

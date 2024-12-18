@@ -1,0 +1,28 @@
+.node_bus {
+    fill: black;
+    stroke-width: 3;
+}
+
+.node_generator {
+    fill: red;
+    stroke-width: 1;
+    stroke: grey;
+}
+
+.node_storage {
+    fill: blue;
+}
+
+.link {
+    stroke-width: 3;
+}
+
+.link.primary {
+    stroke:black;
+}
+
+.link.secondary {
+    stroke:grey;
+    stroke-width: 1;
+    stroke-dasharray: 3,3;
+}

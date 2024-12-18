@@ -2,6 +2,7 @@ import pypsa
 import pandas as pd
 import numpy as np
 import sqlite3
+import json
 
 def connect_to_db(DATABASE_PATH):
     return sqlite3.connect(DATABASE_PATH)
@@ -149,89 +150,74 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
 
     return network
 
-# This function will generate elements using the provided bus, generator, and line data for cytoscape
 def get_network_elements(network):
-
     nodes_data = []
     edges_data = []
 
     # Buses
     for bus_id, bus in network.buses.iterrows():
         nodes_data.append({
-            'data': {
-                'id': bus_id,
-                'label': bus_id,
-                'type': 'bus'
-            },
-            'position': {
-                'x': bus['longitude'],
-                'y': bus['latitude']
-            }
+            'id': str(bus_id),
+            'label': str(bus_id),
+            'type': 'bus',
+            'x': bus['longitude'],
+            'y': bus['latitude']
         })
 
     # Generators
     for gen_id, gen in network.generators.iterrows():
         bus = network.buses.loc[gen['bus']]
-        size = max(10, min(50, gen['p_nom'] / 100))  # Scale capacity between 10 and 50
-        nodes_data.append({
-            'data': {
-                'id': gen_id,
+
+        if gen['p_nom'] > 0:
+            nodes_data.append({
+                'id': str(gen_id),
                 'label': f'{gen_id}({gen["p_nom"]:.0f}MW)',
                 'type': 'generator',
                 'capacity': gen['p_nom'],
-                'size': size
-            },
-            'position': {
-                'x': (bus['longitude']),
-                'y': (bus['latitude'])
-            }
-        })
-        # Add an edge connecting generator to its bus
-        edges_data.append({
-            'data': {
-                'id': f'{gen_id}_to_{gen["bus"]}',
-                'source': gen_id,
-                'target': gen['bus'],
-                'edgeType': 'secondary'
-            }
-        })
-
+                'x': bus['longitude'],
+                'y': bus['latitude']
+            })
+            # Add an edge connecting generator to its bus
+            edges_data.append({
+                'source': str(gen_id),
+                'target': str(gen['bus']),
+                'type': 'secondary'
+            })
+    
     # Storage Units
     for storage_id, storage in network.storage_units.iterrows():
         bus = network.buses.loc[storage['bus']]
         nodes_data.append({
-            'data': {
-                'id': storage_id,
-                'label': storage_id,
-                'type': 'storage',
-                'capacity': storage['p_nom']
-            },
-            'position': {
-                'x': (bus['longitude']),
-                'y': (bus['latitude'])
-            }
+            'id': str(storage_id),
+            'label': str(storage_id),
+            'type': 'storage',
+            'capacity': storage['p_nom'],
+            'x': bus['longitude'],
+            'y': bus['latitude']
         })
         # Add an edge connecting storage to its bus
         edges_data.append({
-            'data': {
-                'id': f'{storage_id}_to_{storage["bus"]}',
-                'source': storage_id,
-                'target': storage['bus'],
-                'edgeType': 'secondary'
-            }
+            'source': str(storage_id),
+            'target': str(storage['bus']),
+            'type': 'secondary'
         })
 
     # Edges (Lines)
     for line_id, line in network.lines.iterrows():
-        edges_data.append({
-            'data': {
-                'id': line_id,
-                'source': line['bus0'],
-                'target': line['bus1'],
-                'length': line['length'],
-                'capacity': line['s_nom'],
-                'label': f'{line["s_nom"]:.0f}MW'
-            }
-        })
 
-    return nodes_data + edges_data
+        edges_data.append({
+            'source': str(line['bus0']),
+            'target': str(line['bus1']),
+            'length': line['length'],
+            'capacity': line['s_nom'],
+            'label': f'{line["s_nom"]:.0f}MW',
+            'type': 'primary'
+        })
+    
+    # Clean output: Convert to JSON
+    clean_data = {
+        "nodes": nodes_data,
+        "links": edges_data
+    }
+
+    return json.dumps(clean_data)

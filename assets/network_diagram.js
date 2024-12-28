@@ -1,6 +1,9 @@
 function resizeSVG(container) {
-    const width = window.innerWidth * 0.9; // Use 90% of the window width
-    const height = window.innerHeight * 0.8; // Use 80% of the window height
+    //const width = window.innerWidth * 0.9; // Use 90% of the window width
+    //const height = window.innerHeight * 0.8; // Use 80% of the window height
+    const width = container.clientWidth;
+    const height = container.clientHeight || window.innerHeight * 0.8; // Use container's height or fallback
+
 
     d3.select(container)
         .select("svg")
@@ -64,10 +67,36 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
 
                 const xScale = width / (maxLongitude - minLongitude);
                 const yScale = height / (maxLatitude - minLatitude);
-                const scale = Math.min(xScale, yScale) * 15;
+                const scale = Math.min(xScale, yScale) * 18;
 
                 projection.scale(scale).translate([width / 2, height / 2]);
 
+                const path = d3.geoPath().projection(projection);
+
+                // Append a group for the map background
+                const mapGroup = svg.append("g").attr("class", "map-group");
+
+                // Load GeoJSON data from assets folder
+                d3.json("assets/gb.json")
+                    .then(data => {
+                        // Draw regions from GeoJSON
+                        mapGroup.selectAll(".region")
+                            .data(data.features) // Use the GeoJSON features
+                            .enter()
+                            .append("path")
+                            .attr("class", "region")
+                            .attr("d", path)
+                            .attr("fill", "#f0f0f0") // Light grey background for regions
+                            .attr("stroke", "#888")  // Stroke for region boundaries
+                            .attr("stroke-width", 0.5);
+                    })
+                    .catch(error => {
+                        console.error("Error loading GeoJSON data:", error);
+                    });
+
+
+
+                // Now start to draw the network diagram...
                 // Project nodes
                 nodes.forEach(d => {
                     [d.x, d.y] = projection([d.x, d.y]);
@@ -107,7 +136,6 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
                 const link = linkGroup.selectAll("line")
                     .data(links)
                     .join("line")
-                    //.attr("class", "link");
                     .classed("link",true)
                     .classed("primary", d => d.type === "primary")
                     .classed("secondary", d => d.type === "secondary");
@@ -142,12 +170,18 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
                         tooltip.style("display", "none");
                     });
 
+                console.log(genNodes);
+
                 const node_generators = nodeGroup.append("g")
                     .selectAll("circle")
                     .data(genNodes)
                     .enter()
                     .append("circle")
-                    .attr("class", "node_generator")
+                    .classed("node",true)
+                    .classed("wind", d => d.fuel === "Wind")
+                    .classed("solar", d => d.fuel === "Solar")
+                    .classed("dsr", d => d.fuel === "DSR")
+                    .classed("other", d => d.fuel !== "Wind" && d.fuel !== "Solar" && d.fuel !== "DSR")
                     .attr("r", d => {
                         if (d.capacity === undefined || isNaN(d.capacity)) {
                             return 10; // Default radius for nodes without p_nom
@@ -186,13 +220,7 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
                         node_generators.attr("transform", d => `translate(${d.x},${d.y})`);
                     });
             }
-            
-            // Handle window resizing
-            window.addEventListener("resize", () => {
-                const { width, height } = resizeSVG(container);
-                svg.attr("width", width).attr("height", height);
-            });
-            
+                       
             return window.dash_clientside.no_update;
 
         }

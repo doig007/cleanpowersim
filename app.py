@@ -19,7 +19,7 @@ import xlsxwriter
 from functools import lru_cache  #TO DO: Investigate adding back in
 
 
-from page_layout import display_page, get_menu_layout, set_active_links, generate_result_charts
+from page_layout import display_page, get_menu_layout, set_active_links, generate_result_charts, render_graphs
 from external_functions import load_data, create_network, save_data
 
 plt.switch_backend('Agg') # Set matplotlib to use a non-interactive backend
@@ -116,7 +116,7 @@ def navigate_to_results_and_set_intent(n_clicks):
 @app.callback(
     [
         Output({'type': 'run-output', 'index': 'results'}, 'children'),
-        Output({'type': 'graphs-output', 'index': 'results'}, 'children'),
+        Output({'type': 'dynamic-graphs-container', 'index': 'results'}, 'children'),
         Output('optimization-intent', 'data', allow_duplicate=True),  # Reset the intent after running
         Output('optimization-results', 'data')  # Store the results in memory
     ],
@@ -131,7 +131,10 @@ def handle_results_page(page_ready, optimization_intent, optimization_results, p
             try:
                 power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df  = load_data(DATABASE_PATH)
                 network = create_network(power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df)
-                         
+
+                #model = network.optimize.create_model()
+                #model.to_file('c:/Temp/model.lp','lp')
+            
                 # Run optimization using PyPSA's optimize method
                 network.optimize(solver_name='cplex')
 
@@ -141,13 +144,17 @@ def handle_results_page(page_ready, optimization_intent, optimization_results, p
                 # Store the optimization results as a dictionary
                 optimization_results_dict = {
                     "snapshots": snapshots_list,
-                    "generators_t_p": network.generators_t.p.to_dict(),
-                    "storage_units_t_p": network.storage_units_t.p.to_dict(),
-                    "buses_t_marginal_price": network.buses_t.marginal_price.to_dict()
+                    "generators_t_p": {
+                        "data": network.generators_t.p.rename(index=str).to_dict(),
+                        "types": network.generators["type"].to_dict()  # Add generator types from the network object
+                    },
+                    "storage_units_t_p": network.storage_units_t.p.rename(index=str).to_dict(),
+                    "buses_t_marginal_price": network.buses_t.marginal_price.rename(index=str).to_dict()
                 }
 
                 # Generate charts using the new function
                 graphs_list = generate_result_charts(optimization_results_dict)
+                charts_html = render_graphs(graphs_list)
 
                 # Convert results dictionary to JSON for storage
                 optimization_results_json = json.dumps(optimization_results_dict)
@@ -155,7 +162,7 @@ def handle_results_page(page_ready, optimization_intent, optimization_results, p
                 current_datetime = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                 run_output = "Economic Dispatch Run Successfully " + "".join(current_datetime)
 
-                return run_output, graphs_list, False, optimization_results_json
+                return run_output, charts_html, False, optimization_results_json
 
             except Exception as e:
                 print(f"Error running optimization: {str(e)}")
@@ -168,46 +175,14 @@ def handle_results_page(page_ready, optimization_intent, optimization_results, p
 
             # Generate charts from stored results
             graphs_list = generate_result_charts(optimization_results_dict)
+            charts_html = render_graphs(graphs_list)
 
             run_output = "Loaded previous results"
-            return run_output, graphs_list, False, optimization_results
+            return run_output, charts_html, False, optimization_results
 
     # If none of the conditions are met, do nothing
     raise PreventUpdate
 
-
-@app.callback(
-    Output({'type': 'dynamic-graphs-container', 'index': 'results'}, 'children'),
-    Input({'type': 'graphs-output', 'index': 'results'}, 'children')
-)
-def render_graphs(graphs_list):
-    if not graphs_list:
-        return html.Div("No graphs to display")
-
-    graph_components = []
-    for graph in graphs_list:
-        # Create a graph component and a data table
-        graph_components.append(
-            html.Div([
-                html.H4(graph['title'], className='text-center'),
-                dcc.Graph(
-                    id=graph['id'],
-                    figure=graph['figure'],
-                    style={'height': '500px', 'marginBottom': '20px'}
-                ),
-                # Create a simple table to display the raw data
-                dash_table.DataTable(
-                    id=f"table-{graph['id']}",
-                    columns=[{"name": key, "id": key} for key in graph['raw_data'][0].keys()],
-                    data=graph['raw_data'],
-                    style_table={'margin': '20px auto', 'width': '90%'},
-                    style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'},
-                    style_cell={'padding': '5px'}
-                )
-            ], style={'marginBottom': '40px'})
-        )
-
-    return graph_components
 
 # Callback to handle downloading entire network file as Excel
 @app.callback(

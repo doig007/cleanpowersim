@@ -42,7 +42,7 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
     # Add buses to the network
     for _, row in buses_df.iterrows():
         network.add("Bus", row["name"], v_nom=row["voltage_kv"],
-                    longitude=row["longitude"], latitude=row["latitude"])
+                    longitude=row["longitude"], latitude=row["latitude"], carrier="AC")
 
     # Add power plants (generators) to the network
     for _, row in power_plants_df.iterrows():
@@ -73,6 +73,8 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
                 p_nom=p_nom_max,
                 p_max_pu=profile,
                 marginal_cost=row["srmc"],
+                type=row['type'],
+                e_sum_max=1e10,  # Temporary set to very high number.  Default value of infinity would otherwise be overwritten by 1e6 which could be binding.
                 overwrite=True
             )
         else:
@@ -110,6 +112,7 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
                 s_nom=1e6 if pd.isna(row["max_capacity_mw"]) else row["max_capacity_mw"],
                 r=row["r"],
                 x=row["x"],
+                carrier="AC",
                 overwrite=True
             )
         else:
@@ -173,6 +176,7 @@ def get_network_elements(network):
                 'id': str(gen_id),
                 'label': f'{gen_id}({gen["p_nom"]:.0f}MW)',
                 'type': 'generator',
+                'fuel': gen['type'],  # To identify wind and solar plant
                 'capacity': gen['p_nom'],
                 'x': bus['longitude'],
                 'y': bus['latitude']

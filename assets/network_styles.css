@@ -4,13 +4,36 @@
 }
 
 .node_generator {
-    fill: red;
+    fill: grey;
     stroke-width: 1;
     stroke: grey;
 }
 
+.node {
+    stroke-width: 1;
+    stroke: grey;
+}
+
+.node.wind {
+    fill: lightblue;
+}
+
+.node.solar {
+    fill: #FFD700;
+}
+
+.node.dsr {
+    fill: seagreen;
+}
+
+.node.other {
+    fill: darkgray;
+}
+
+
+
 .node_storage {
-    fill: blue;
+    fill: purple;
 }
 
 .link {

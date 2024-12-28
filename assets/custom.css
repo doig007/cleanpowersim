@@ -1,0 +1,43 @@
+/* Yellow Slider Track */
+.yellow-slider .rc-slider-track {
+    background-color: #FFD700 !important; /* Gold color */
+}
+
+/* Yellow Slider Handle */
+.yellow-slider .rc-slider-handle {
+    border-color: #FFD700 !important; /* Gold color for the handle */
+    background-color: #FFD700 !important; /* Gold color for the center */
+}
+
+/* Hover Effect for the Handle */
+.yellow-slider .rc-slider-handle:hover {
+    border-color: #FFA500 !important; /* Slightly darker yellow */
+}
+
+/* Active Effect for the Handle */
+.yellow-slider .rc-slider-handle:active {
+    border-color: #FF8C00 !important; /* Even darker yellow */
+}
+
+
+
+/* Green Slider Track */
+.green-slider .rc-slider-track {
+    background-color: seagreen !important; 
+}
+
+/* Green Slider Handle */
+.green-slider .rc-slider-handle {
+    border-color: seagreen !important;
+    background-color: seagreen !important;
+}
+
+/* Hover Effect for the Handle */
+.green-slider .rc-slider-handle:hover {
+    border-color: green !important;
+}
+
+/* Active Effect for the Handle */
+.green-slider .rc-slider-handle:active {
+    border-color: darkgreen !important; 
+}

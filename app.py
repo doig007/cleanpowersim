@@ -67,6 +67,7 @@ def update_page_content(pathname):
 
 @app.callback(
     [
+        Output('dashboard-link', 'active'),
         Output('editor-link', 'toggle_style'), # using dropdown menu (no active prop) so manually changing background color
         Output('diagram-link', 'active'),
         Output('settings-link', 'active'),

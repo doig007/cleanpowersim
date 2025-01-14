@@ -303,14 +303,17 @@ def display_page(pathname):
 def set_active_links(pathname):
     # Default values for all active links
     active_links = {
-        'editor-link': {'backgroundColor': "transparent"},
+        'dashboard-link': {'backgroundColor': "transparent"},
+        'editor-link': False,
         'diagram-link': False,
         'settings-link': False,        
         'results-link': False
     }
 
     # Set the active link based on pathname
-    if pathname.find('editor') > 0:
+    if pathname == "/dashboard":
+        active_links['dashboard-link'] = True
+    elif pathname.find('editor') > 0:
         active_links['editor-link'] = {'backgroundColor': "#0d6efd"}
     elif pathname == '/diagram':
         active_links['diagram-link'] = True
@@ -321,6 +324,7 @@ def set_active_links(pathname):
 
     # Return each link state
     return (
+        active_links['dashboard-link'],
         active_links['editor-link'],
         active_links['diagram-link'],
         active_links['settings-link'],
@@ -338,6 +342,13 @@ def get_menu_layout():
         html.Hr(),
         dbc.Nav(
             [
+                dbc.NavLink(
+                    [html.I(className="bi bi-diagram-3-fill me-2"), "Dashboard"],
+                    href="/dashboard",
+                    id="dashboard-link",
+                    active=True,
+                    className="nav-item text-white"
+                ),
                 dbc.DropdownMenu(
                     [
                         dbc.DropdownMenuItem("Power Plants", href="/editor/power-plants", id="power-plants-link", className="ms-4 text-white"),

@@ -3,6 +3,8 @@
 ## Overview
 This project is an interactive web application designed to simulate power systems, specifically focused on renewable energy sources such as wind and solar. The application allows users to modify system parameters, view a network diagram, run optimization models, and view the results of these simulations. The app is built using Python, Dash, and PyPSA (Python for Power System Analysis).
 
+![image](https://github.com/user-attachments/assets/83a9704d-f620-4280-91a0-18cc42f9a93f)
+
 ## Features
 - **Power System Editor**: Edit and configure power plants, transmission lines, storage units, demand profiles, and renewable generation profiles.
 - **Network Diagram**: Visualize the power system network, including generators, storage units, and buses.

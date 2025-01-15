@@ -157,7 +157,7 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
                     .attr("transform", d => `translate(${d.x}, ${d.y})`)
                     .on("mouseenter", (event, d) => {
                             tooltip.style("display", "block").html(
-                                `<strong>${d.id}</strong><br>
+                                `<strong>${d.name}</strong><br>
                                 Type: ${d.type}`
                             );
                         }
@@ -169,8 +169,6 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
                     .on("mouseleave", () => {
                         tooltip.style("display", "none");
                     });
-
-                console.log(genNodes);
 
                 const node_generators = nodeGroup.append("g")
                     .selectAll("circle")
@@ -192,7 +190,7 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
                     .attr("transform", d => `translate(${d.x}, ${d.y})`)
                     .on("mouseenter", (event, d) => {
                             tooltip.style("display", "block").html(
-                                `<strong>${d.id}</strong><br>
+                                `<strong>${d.name}</strong><br>
                                 Type: ${d.type}<br>
                                 Capacity: ${d.capacity.toFixed(0)}MW`
                             );

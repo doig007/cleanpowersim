@@ -20,6 +20,15 @@ def load_data(DATABASE_PATH):
     conn.close()
     return power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df 
 
+def load_data_for_diagram(DATABASE_PATH):
+    conn = connect_to_db(DATABASE_PATH)
+    power_plants_df = pd.read_sql_query("SELECT * FROM power_plants", conn)
+    buses_df = pd.read_sql_query("SELECT * FROM buses", conn).set_index('id')
+    lines_df = pd.read_sql_query("SELECT id, name, from_bus, to_bus, length_km, max_capacity_mw, r, x FROM lines", conn)
+    storage_units_df = pd.read_sql_query("SELECT * FROM storage_units", conn)
+    conn.close()
+    return power_plants_df, buses_df, lines_df, storage_units_df
+
 def save_data(DATABASE_PATH, table_name, df):
     # Saves the provided dataframe 'df' into the table 'table_name' in the database located at DATABASE_PATH
     conn = connect_to_db(DATABASE_PATH)
@@ -218,6 +227,89 @@ def get_network_elements(network):
             'type': 'primary'
         })
     
+    # Clean output: Convert to JSON
+    clean_data = {
+        "nodes": nodes_data,
+        "links": edges_data
+    }
+
+    return json.dumps(clean_data)
+
+
+def get_network_elements_from_df(DATABASE_PATH):
+    nodes_data = []
+    edges_data = []
+
+    power_plants_df, buses_df, lines_df, storage_units_df = load_data_for_diagram(DATABASE_PATH)
+
+    print(buses_df.columns)
+    print(power_plants_df.columns) 
+    print(lines_df.columns)
+
+    # Buses
+    for bus in buses_df.itertuples():
+        nodes_data.append({
+            'id': str(bus.Index),
+            'name': bus.name,
+            'label': bus.name,
+            'type': 'bus',
+            'x': bus.longitude,
+            'y': bus.latitude
+        })
+
+    # Edges (Lines)
+    for line in lines_df.itertuples():
+        edges_data.append({
+            'source': str(line.from_bus),
+            'target': str(line.to_bus),
+            'length': line.length_km,
+            'capacity': line.max_capacity_mw,
+            'label': f'{line.max_capacity_mw:.0f}MW',
+            'type': 'primary'
+        })
+    
+    # Generators
+    for gen in power_plants_df.itertuples():
+        bus = buses_df.loc[gen.bus_id]
+
+        if gen.capacity_mw > 0:
+            nodes_data.append({
+                'id': 'gen'+str(gen.id),
+                'name': str(gen.name),
+                'label': f'{gen.name}({gen.capacity_mw:.0f}MW)',
+                'type': 'generator',
+                'fuel': gen.type,  # To identify wind and solar plant
+                'capacity': gen.capacity_mw,
+                'x': bus['longitude'],
+                'y': bus['latitude']
+            })
+            # Add an edge connecting generator to its bus
+            edges_data.append({
+                'source': 'gen'+str(gen.id),
+                'target': str(gen.bus_id),
+                'type': 'secondary'
+            })
+    
+    # Storage Units
+    for _, storage in storage_units_df.itertuples():
+        bus = buses_df.loc[storage.bus_id]
+        nodes_data.append({
+            'id': 'storage'+str(storage.id),
+            'name': str(storage.name),
+            'label': storage.name,
+            'type': 'storage',
+            'capacity': storage.capacity_mw,
+            'x': bus['longitude'],
+            'y': bus['latitude']
+        })
+        # Add an edge connecting storage to its bus
+        edges_data.append({
+            'source': 'storage'+str(storage.id),
+            'target': str(storage.bus_id),
+            'type': 'secondary'
+        })
+
+
     # Clean output: Convert to JSON
     clean_data = {
         "nodes": nodes_data,

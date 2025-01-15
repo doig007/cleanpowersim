@@ -4,7 +4,7 @@ import pandas as pd
 import json
 import plotly.graph_objects as go
 
-from external_functions import load_data, create_network, get_network_elements
+from external_functions import load_data, create_network, get_network_elements, get_network_elements_from_df
 from model_checks import check_capacity_vs_demand, check_nodal_capacity_vs_demand, export_network_to_excel
 
 DATABASE_PATH = 'power_system.db'
@@ -198,14 +198,23 @@ def display_page(pathname):
 
     elif pathname == '/dashboard':
         
-        power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df = load_data(DATABASE_PATH)    # Reload the data from the database
-        network = create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df)
-        network_data = get_network_elements(network)
+        # Slow code that creates PyPSA object
+        # power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df = load_data(DATABASE_PATH)    # Reload the data from the database
+        # network = create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df)
+        # network_data = get_network_elements(network)
+
+        # Attempt at direct method
+        network_data = get_network_elements_from_df(DATABASE_PATH)
+
 
         # Calculate total capacities for Solar and Wind plants
-        solar_capacity = power_plants_df.loc[power_plants_df['type'] == 'Solar', 'capacity_mw'].sum()
-        wind_capacity = power_plants_df.loc[power_plants_df['type'] == 'Wind', 'capacity_mw'].sum()
-        dsr_capacity = power_plants_df.loc[power_plants_df['type'] == 'DSR', 'capacity_mw'].sum()
+        #solar_capacity = power_plants_df.loc[power_plants_df['type'] == 'Solar', 'capacity_mw'].sum()
+        #wind_capacity = power_plants_df.loc[power_plants_df['type'] == 'Wind', 'capacity_mw'].sum()
+        #dsr_capacity = power_plants_df.loc[power_plants_df['type'] == 'DSR', 'capacity_mw'].sum()
+
+        solar_capacity = 3000
+        wind_capacity = 10000
+        dsr_capacity = 1000
 
         tab_content = dbc.Container([
             dbc.Row([

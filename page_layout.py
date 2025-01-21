@@ -4,13 +4,13 @@ import pandas as pd
 import json
 import plotly.graph_objects as go
 
-from external_functions import load_data, create_network, get_network_elements, get_network_elements_from_df
+from external_functions import load_data, create_network, get_network_elements, get_network_elements_from_df, calc_aggregate_capacities
 from model_checks import check_capacity_vs_demand, check_nodal_capacity_vs_demand, export_network_to_excel
 
 DATABASE_PATH = 'power_system.db'
 
 # Content Page Callback
-def display_page(pathname):
+def display_page(pathname, optimization_intent, optimization_results):
     # Set a default tab content
     tab_content = html.Div([
             html.Iframe(
@@ -160,12 +160,33 @@ def display_page(pathname):
             html.Button("Save Changes", id={'type': 'save-changes-btn', 'index': 'snapshots'}, n_clicks=0, className='btn btn-primary my-4')
         ])
     elif pathname == '/results':
+
+        if optimization_intent:
+            # Optimization model should be running so ignore any stored results and display placeholder
+            charts_html = "Charts will appear here once the model has finished optimization"
+            run_output = "Optimization model is currently running..."
+
+        # If there are already stored results, return them
+        elif optimization_results:
+            print("Loading previous results...")
+            # Load stored results from JSON
+            optimization_results_dict = optimization_results
+
+            run_output = "Loaded previous results"
+
+            # Generate charts from stored results
+            graphs_list = generate_result_charts(optimization_results_dict)
+            charts_html = render_graphs(graphs_list)
+        else:
+            run_output = "Run optimization using the button to the left"
+            charts_html = "No optimization results available"
+
         tab_content = html.Div([
             html.H2("Optimisation Results", className='text-center my-4'),
-            html.Div(id='page-ready', style={'display': 'none'}),  # Hidden div to signal page readiness
-            html.Div(id={'type': 'run-output', 'index': 'results'}, style={'marginTop': '20px', 'textAlign': 'center'}),
-            html.Div(id={'type': 'dynamic-graphs-container', 'index': 'results'}, style={'marginTop': '20px'})
+            html.Div(id="run-output", style={'marginTop': '20px', 'textAlign': 'center'}, children=run_output),
+            html.Div(id="dynamic-graphs-container", style={'marginTop': '20px'}, children=charts_html)
         ])
+
 
     elif pathname == '/debug':
         
@@ -198,29 +219,14 @@ def display_page(pathname):
 
     elif pathname == '/dashboard':
         
-        # Slow code that creates PyPSA object
-        # power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df = load_data(DATABASE_PATH)    # Reload the data from the database
-        # network = create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df)
-        # network_data = get_network_elements(network)
-
-        # Attempt at direct method
         network_data = get_network_elements_from_df(DATABASE_PATH)
-
-
-        # Calculate total capacities for Solar and Wind plants
-        #solar_capacity = power_plants_df.loc[power_plants_df['type'] == 'Solar', 'capacity_mw'].sum()
-        #wind_capacity = power_plants_df.loc[power_plants_df['type'] == 'Wind', 'capacity_mw'].sum()
-        #dsr_capacity = power_plants_df.loc[power_plants_df['type'] == 'DSR', 'capacity_mw'].sum()
-
-        solar_capacity = 3000
-        wind_capacity = 10000
-        dsr_capacity = 1000
+        solar_capacity, wind_capacity, dsr_capacity = calc_aggregate_capacities(DATABASE_PATH)
 
         tab_content = dbc.Container([
             dbc.Row([
                 dbc.Col([
                     html.H2("Welcome to the Power System Optimization Dashboard"),
-                    html.P(" This dashboard provides tools to optimize and analyze power system operations, allowing users to adjust, simulate, and evaluate various components of a power grid. Whether you're managing power plants, assessing grid stability, or planning future expansions, this platform helps you make data-driven decisions with intuitive visualizations and modeling features.",className="ms-2 text-secondary")
+                    html.P(" This dashboard provides tools to optimize and analyze power system operations, allowing users to adjust, simulate, and evaluate various components of a power grid.",className="ms-2 text-secondary")
                 ])
             ]),
             dbc.Row([
@@ -238,13 +244,12 @@ def display_page(pathname):
                                 id='solar-slider',
                                 min=0,
                                 max=max(5000,solar_capacity*1.5)/1000,
-                                step=10,
+                                step=5,
                                 value=solar_capacity/1000,
                                 marks=None,
                                 tooltip={"placement": "bottom", "always_visible": True},
                                 className="yellow-slider"
-                            ),
-                            html.Div(id='solar-output', className="text-center mt-2 text-info")
+                            )
                         ], className="mb-4"),
 
                         # Wind Adjustment Section
@@ -257,12 +262,11 @@ def display_page(pathname):
                                 id='wind-slider',
                                 min=0,
                                 max=max(5000,wind_capacity*1.5)/1000,
-                                step=10,
+                                step=5,
                                 value=wind_capacity/1000,
                                 marks=None,
                                 tooltip={"placement": "bottom", "always_visible": True}
-                            ),
-                            html.Div(id='wind-output', className="text-center mt-2 text-info")
+                            )
                         ], className="mb-4"),
 
                         # DSR Adjustment Section
@@ -275,20 +279,16 @@ def display_page(pathname):
                                 id='dsr-slider',
                                 min=0,
                                 max=max(15000,dsr_capacity*1.5)/1000,
-                                step=10,
+                                step=1,
                                 value=dsr_capacity/1000,
                                 marks=None,
                                 tooltip={"placement": "bottom", "always_visible": True},
                                 className="green-slider"
-                            ),
-                            html.Div(id='dsr-output', className="text-center mt-2 text-info")
-                        ], className="mb-4"),
-
-
-
+                            )
+                        ], className="mb-4")
 
                     ])
-                ], width=3),  # Left column width: 3/12
+                ], width=4),  # Left column width: 3/12
 
                 # Right-hand side: Network Diagram
                 dbc.Col([
@@ -299,8 +299,15 @@ def display_page(pathname):
                         id="d3-container",
                         style={"width": "100%"}
                     )
-                ], width=9)  # Right column width: 9/12
-            ])
+                ], width=8)  # Right column width: 9/12
+            ]),
+            dbc.Row([
+                dbc.Col([
+                    html.H3("Indicative inputs", className="text-primary mb-4 fs-6"),
+                    html.Div(id={'type': 'dynamic-graphs-container', 'index': 'indicative_inputs'})
+                ], width=6),
+                dbc.Col([],width=6)
+            ]),
         ], fluid=True)
 
     # Return the content
@@ -443,6 +450,10 @@ def get_menu_layout():
 
 
 def generate_result_charts(optimization_results):
+
+    # If optimization results are not available, return an empty list
+    if not optimization_results:
+        return []   
 
     print("Generating result charts...")
 

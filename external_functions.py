@@ -4,6 +4,16 @@ import numpy as np
 import sqlite3
 import json
 
+import threading
+import logging
+import sys
+from io import StringIO
+from queue import Queue, Empty
+
+# Global stream for capturing logs
+log_stream = StringIO()
+interval_disabled = False
+
 def connect_to_db(DATABASE_PATH):
     return sqlite3.connect(DATABASE_PATH)
 
@@ -28,6 +38,13 @@ def load_data_for_diagram(DATABASE_PATH):
     storage_units_df = pd.read_sql_query("SELECT * FROM storage_units", conn)
     conn.close()
     return power_plants_df, buses_df, lines_df, storage_units_df
+
+def load_data_table(DATABASE_PATH, table):
+    conn = connect_to_db(DATABASE_PATH)
+    df = pd.read_sql_query("SELECT * FROM " + str(table), conn)
+    conn.close()
+    return df 
+
 
 def save_data(DATABASE_PATH, table_name, df):
     # Saves the provided dataframe 'df' into the table 'table_name' in the database located at DATABASE_PATH
@@ -61,9 +78,9 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
 
             # Determine the generation profile
             if row['type'] == 'Solar':
-                filtered_df = solar_profile_df[solar_profile_df['profile'] == row['profile']]
+                filtered_df = solar_profile_df[solar_profile_df['profile_name'] == row['profile']]
             elif row['type'] == 'Wind':
-                filtered_df = wind_profile_df[wind_profile_df['profile'] == row['profile']]
+                filtered_df = wind_profile_df[wind_profile_df['profile_name'] == row['profile']]
             else:
                 filtered_df = pd.DataFrame()
 
@@ -242,10 +259,6 @@ def get_network_elements_from_df(DATABASE_PATH):
 
     power_plants_df, buses_df, lines_df, storage_units_df = load_data_for_diagram(DATABASE_PATH)
 
-    print(buses_df.columns)
-    print(power_plants_df.columns) 
-    print(lines_df.columns)
-
     # Buses
     for bus in buses_df.itertuples():
         nodes_data.append({
@@ -317,3 +330,63 @@ def get_network_elements_from_df(DATABASE_PATH):
     }
 
     return json.dumps(clean_data)
+
+
+def calc_aggregate_capacities(DATABASE_PATH):
+
+    power_plants_df, buses_df, lines_df, storage_units_df = load_data_for_diagram(DATABASE_PATH)
+
+    solar_capacity = power_plants_df.loc[power_plants_df['type'] == 'Solar', 'capacity_mw'].sum()
+    wind_capacity = power_plants_df.loc[power_plants_df['type'] == 'Wind', 'capacity_mw'].sum()
+    dsr_capacity = power_plants_df.loc[power_plants_df['type'] == 'DSR', 'capacity_mw'].sum()
+
+    return solar_capacity, wind_capacity, dsr_capacity
+
+
+
+# Function to Run Optimization and Capture Output
+def run_optimization(network):
+
+    # Load network data and create PyPSA network object
+    # power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df  = load_data(DATABASE_PATH)
+    # network = create_network(power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df)
+
+    # Set up logging 
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+
+    try:
+        logger.info("Starting network optimization...")
+
+        try:
+            network.optimize(solver_name='cplex')
+            logger.info("Optimization complete!")
+            optimization_successful = True
+        except Exception as opt_error:  # Catch solver errors
+            logger.exception("Error during optimization: %s", opt_error)
+            logger.debug("CPLEX log: %s", network.opt.get_log())  # Log CPLEX solver's internal log!
+            optimization_successful = False  # Mark optimization as unsuccessful
+            raise  # Re-raise the error for the main thread to handle
+
+        # Process results if optimization was successful
+        if optimization_successful:
+
+            # Convert the snapshots to a list of strings for JSON serialization
+            snapshots_list = [str(snapshot) for snapshot in network.snapshots]
+
+            # Store the optimization results as a dictionary
+            optimization_results_dict = {
+                "snapshots": snapshots_list,
+                "generators_t_p": {
+                    "data": network.generators_t.p.rename(index=str).to_dict(),
+                    "types": network.generators["type"].to_dict()  # Add generator types from the network object
+                },
+                "storage_units_t_p": network.storage_units_t.p.rename(index=str).to_dict(),
+                "buses_t_marginal_price": network.buses_t.marginal_price.rename(index=str).to_dict()
+            }
+
+            return optimization_results_dict
+
+    except Exception as e:
+        logger.exception("An unexpected error occurred: %s", e)
+        return None

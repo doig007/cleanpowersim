@@ -43,13 +43,17 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
                         .attr("width", width)
                         .attr("height", height)
                         .attr("viewBox", `0 0 ${width} ${height}`)
-                        .call(d3.zoom().on("zoom", function (event) {
-                            svg.attr("transform", event.transform);
-                        }));
+                        //.call(d3.zoom().on("zoom", function (event) { // Disable zoom for now
+                        //    svg.attr("transform", event.transform);
+                        //}));
                 } else {
                     svg.attr("width", width);
                     svg.attr("height", height);
                     svg.attr("viewBox", `0 0 ${width} ${height}`);
+
+                    // Remove all the existing elements in the SVG container so that when data is updated, old elements are removed
+                    svg.selectAll("*").remove();
+
                 }
 
                 const longitudes = nodes.map(d => d.x);
@@ -146,15 +150,18 @@ window.dash_clientside = Object.assign({}, window.dash_clientside, {
                 const genNodes = nodes.filter(d => d.type === 'generator');
                 const storageNodes = nodes.filter(d => d.type === 'storage');
 
+                const nodeSize = 15;
+
                 const node_bus = nodeGroup.append("g")
                     .selectAll("rect")
                     .data(busNodes)
                     .enter()
                     .append("rect")
                     .attr("class", "node_bus")
-                    .attr("width",15)
-                    .attr("height",15)                   
-                    .attr("transform", d => `translate(${d.x}, ${d.y})`)
+                    .attr("width",nodeSize)
+                    .attr("height",nodeSize)                   
+                    .attr("x", d => d.x - nodeSize / 2) // Center the square on the node
+                    .attr("y", d => d.y - nodeSize / 2) // Center the square on the node
                     .on("mouseenter", (event, d) => {
                             tooltip.style("display", "block").html(
                                 `<strong>${d.name}</strong><br>

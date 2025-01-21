@@ -1,38 +1,36 @@
 import dash
 from dash import dcc, html, Input, Output, State, MATCH, ALL, ctx
-from dash import dash_table
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 from dash.dependencies import ClientsideFunction
 
 import pandas as pd
-import pypsa
 import numpy as np
-import matplotlib.pyplot as plt
 import io
 import json
 import base64
 import os
 import tempfile
-import xlsxwriter
+import plotly.graph_objects as go
 
-from functools import lru_cache  #TO DO: Investigate adding back in
-
+from functools import lru_cache
 
 from page_layout import display_page, get_menu_layout, set_active_links, generate_result_charts, render_graphs
-from external_functions import load_data, create_network, save_data
+from external_functions import load_data, save_data, load_data_table, get_network_elements_from_df, create_network, run_optimization
 
-plt.switch_backend('Agg') # Set matplotlib to use a non-interactive backend
+from external_functions import log_stream, interval_disabled  # Import global variables
 
-# Step 1: Set up the SQLite database connection function
+
+# Set up the SQLite database connection function
 DATABASE_PATH = 'power_system.db'
 
-# Step 2: Load data into Pandas DataFrame from SQLite
+# Load data into Pandas DataFrame from SQLite
 power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df = load_data(DATABASE_PATH)
 
-# Step 3: Initialize Dash app with Bootstrap stylesheet
+# Initialize Dash app with Bootstrap stylesheet
 app = dash.Dash(
     __name__,
+    suppress_callback_exceptions=True,
     external_stylesheets=[
         dbc.themes.BOOTSTRAP,
         "https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.8.1/font/bootstrap-icons.min.css"
@@ -43,27 +41,53 @@ app.title = 'Clean Power Sim'
 app._favicon = ("assets/favicon.ico")
 
 
-# Step 4: Define layout with an enhanced sidebar for navigation
+# Define layout with an enhanced sidebar for navigation
 app.layout = dbc.Container([
     dbc.Row([
         dbc.Col(get_menu_layout(), width=3, style={'padding': '0', 'margin': '0'}),  # Enhanced Sidebar column from separate module
         dbc.Col([
             dcc.Location(id='url', refresh=False),
-            dcc.Store(id='optimization-intent', data=False, storage_type='memory'),  # Track user intent to run optimization
-            dcc.Store(id='optimization-results', data=None, storage_type='memory'),  # Store to keep optimization results
-            dcc.Store(id={'type': 'save-status', 'index': 'global'}, data=0, storage_type='memory'),
             html.Div(id='page-content'),  # Main content area
+            
+            # Modal to display progress and solver output
+            dbc.Modal(
+                [
+                    dbc.ModalHeader("Running Optimization"),
+                    dbc.ModalBody([
+                        dbc.Progress(id="optimization-progress", value=0, striped=True, animated=True),
+                        html.H3("Solver Command Line Output:", className="text-primary mb-4 fs-6"),
+                        html.Div(id="solver-output", style={"marginTop": "20px", "whiteSpace": "pre-wrap", "minHeight":"200px", "maxHeight": "300px", "overflowY": "scroll"})
+                    ]),
+                    dbc.ModalFooter(
+                        dbc.Button("Close", id="close-modal-btn", className="ms-auto", n_clicks=0)
+                    ),
+                ],
+                id="optimization-modal",
+                is_open=False,
+                size="lg"
+            ),
         ], width=9)  # Main content column
-    ])
+    ]),
+    dcc.Store(id='optimization-intent', data=False, storage_type='memory'),  # Track user intent to run optimization
+    dcc.Interval(id="optimization-interval", interval=1000, n_intervals=0, disabled=True),  # Interval for updates
+    dcc.Store(id='optimization-progress-store', data=0, storage_type='memory'),  # Store for progress updates
+    dcc.Store(id='optimization-results', data=None, storage_type='memory'),  # Store to keep optimization results
+    dcc.Store(id={'type': 'save-status', 'index': 'global'}, data=0, storage_type='memory')
 ], fluid=True)
 
-# Step 6: Define callback to display pages based on navigation and handle active link highlighting
+############################
+### Callback definitions ###
+############################
+
+# Main callback to display pages based on navigation and handle active link highlighting
 @app.callback(
     Output('page-content', 'children'),
-    [Input('url', 'pathname')]
+    [Input('url', 'pathname')],
+    [State('optimization-intent', 'data'),
+     State('optimization-results', 'data')]
 )
-def update_page_content(pathname):
-    return display_page(pathname)
+def update_page_content(pathname, optimization_intent, optimization_results):
+    return display_page(pathname, optimization_intent, optimization_results)
 
 @app.callback(
     [
@@ -79,7 +103,8 @@ def update_active_links(pathname):
     active_links = set_active_links(pathname)
     return active_links
 
-# Step 7: Single Callback for saving changes
+
+# Callback for saving changes in the Editor pages
 @app.callback(
     Output({'type': 'save-status', 'index': MATCH}, 'data', allow_duplicate=True),
     [Input({'type': 'save-changes-btn', 'index': ALL}, 'n_clicks')],
@@ -102,93 +127,134 @@ def save_changes(n_clicks_list, tables_data_list):
 
     return 1
 
-# Step 8: Define the callback to run optimization when the button is clicked
-@app.callback(
-    [Output('url', 'pathname'), Output('optimization-intent', 'data', allow_duplicate=True)],
-    Input('run-model-btn', 'n_clicks'),
-    prevent_initial_call=True
-)
-def navigate_to_results_and_set_intent(n_clicks):
-    if n_clicks:
-        # Navigate to results page and set intent to True for optimization
-        return '/results', True
-    raise PreventUpdate  # Prevent unnecessary updates if not clicked
 
+# Callback to run optimization (via setting intent) and navigate to results page when the run optimization button is clicked
 @app.callback(
     [
-        Output({'type': 'run-output', 'index': 'results'}, 'children'),
-        Output({'type': 'dynamic-graphs-container', 'index': 'results'}, 'children'),
-        Output('optimization-intent', 'data', allow_duplicate=True),  # Reset the intent after running
-        Output('optimization-results', 'data')  # Store the results in memory
+        Output('url', 'pathname'), 
+        Output('optimization-intent', 'data', allow_duplicate=True),
+        Output('optimization-modal', 'is_open', allow_duplicate=True)
     ],
-    [Input('page-ready', 'id')],
-    [State('optimization-intent', 'data'), State('optimization-results', 'data'), State('url', 'pathname')],
+    [
+        Input('run-model-btn', 'n_clicks')
+    ],
+    [        
+        State('optimization-modal', 'is_open')
+    ],
     prevent_initial_call=True
 )
-def handle_results_page(page_ready, optimization_intent, optimization_results, pathname):
-    if pathname == '/results':
-        # If optimization intent is set, run the model and store the results
-        if optimization_intent:
-            try:
-                power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df  = load_data(DATABASE_PATH)
-                network = create_network(power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df)
+def navigate_to_results_and_set_intent(n_clicks, optimization_modal):
+    if n_clicks:
+        # Navigate to results page and set optimization intent to True and modal to True
+        return '/results', True, True
+    raise PreventUpdate  # Prevent unnecessary updates if not clicked
 
-                #model = network.optimize.create_model()
-                #model.to_file('c:/Temp/model.lp','lp')
-            
-                # Run optimization using PyPSA's optimize method
-                network.optimize(solver_name='cplex')
+# Callback to run optimization when the intent is set
+@app.callback(
+    [
+        Output('optimization-intent', 'data', allow_duplicate=True),  # Reset the intent after running
+        Output('optimization-results', 'data', allow_duplicate=True),  # Store the results
+        Output('optimization-interval', 'disabled', allow_duplicate=True), # Set the interval for async running of optimization
+        Output('run-output', 'children', allow_duplicate=True), # Output to display the result of the optimization
+        Output('dynamic-graphs-container', 'children', allow_duplicate=True), # Output to display the charts of the optimization result
+        Output("optimization-modal", "is_open", allow_duplicate=True), # Close the modal after optimization
+    ],
+    [
+        Input('optimization-intent', 'data')
+    ],
+    prevent_initial_call=True
+)
+def run_optimization_callback(optimization_intent):
+    global interval_disabled
 
-                # Convert the snapshots to a list of strings for JSON serialization
-                snapshots_list = [str(snapshot) for snapshot in network.snapshots]
+    if optimization_intent:     
+        print("Running optimization...")
+        # Load network data and create network object HERE, in the main thread
+        power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df  = load_data(DATABASE_PATH)
+        network = create_network(power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df)
 
-                # Store the optimization results as a dictionary
-                optimization_results_dict = {
-                    "snapshots": snapshots_list,
-                    "generators_t_p": {
-                        "data": network.generators_t.p.rename(index=str).to_dict(),
-                        "types": network.generators["type"].to_dict()  # Add generator types from the network object
-                    },
-                    "storage_units_t_p": network.storage_units_t.p.rename(index=str).to_dict(),
-                    "buses_t_marginal_price": network.buses_t.marginal_price.rename(index=str).to_dict()
-                }
+        # Run optimization directly (no threading)
+        optimization_results = run_optimization(network)  # Get the results directly
 
-                # Generate charts using the new function
-                graphs_list = generate_result_charts(optimization_results_dict)
-                charts_html = render_graphs(graphs_list)
+        if optimization_results is not None:  # Check result from optimization
+            print("Optimization complete! storing results.") # Check to see if it completes
+            interval_disabled = True # disable interval as soon as result or exception occurs.
 
-                # Convert results dictionary to JSON for storage
-                optimization_results_json = json.dumps(optimization_results_dict)
-
-                current_datetime = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-                run_output = "Economic Dispatch Run Successfully " + "".join(current_datetime)
-
-                return run_output, charts_html, False, optimization_results_json
-
-            except Exception as e:
-                print(f"Error running optimization: {str(e)}")
-                return f"Error running economic dispatch: {str(e)}", [], False, None
-
-        # If there are already stored results, return them
-        elif optimization_results:
-            # Load stored results from JSON
-            optimization_results_dict = json.loads(optimization_results)
-
-            # Generate charts from stored results
-            graphs_list = generate_result_charts(optimization_results_dict)
+            graphs_list = generate_result_charts(optimization_results)
             charts_html = render_graphs(graphs_list)
+            run_output = "Optimization complete!"
 
-            run_output = "Loaded previous results"
-            return run_output, charts_html, False, optimization_results
+            return False, optimization_results, interval_disabled, run_output, charts_html, False  # Return the actual result
+        else:
+            print("Optimization Failed.  Returning None")
+            interval_disabled = True # disable interval as soon as result or exception occurs.
 
-    # If none of the conditions are met, do nothing
-    raise PreventUpdate
+            charts_html = "Charts will appear here once the model has finished optimization"
+            run_output = "Optimization model has failed."
+
+            return False, None, interval_disabled, run_output, charts_html, True  # Return None which indicates error to callback
+
+    else:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+
+# Callback to Update Logs and Fetch Results
+@app.callback(
+    [
+        Output('optimization-progress', 'value'),
+        Output('solver-output', 'children'),
+        Output('optimization-results', 'data', allow_duplicate=True),
+        Output('optimization-interval', 'disabled', allow_duplicate=True),
+    ],
+    Input("optimization-interval", "n_intervals"),
+    [State("solver-output", "children"),
+     State("optimization-results", "data")],
+     State('optimization-interval','disabled'),
+    prevent_initial_call=True,
+)
+def update_logs_and_fetch_results(n_intervals, current_output, current_results, interval_disabled_state):
+    global log_stream
+    global interval_disabled
+
+    if interval_disabled: # Prevent updates and further checks if already disabled
+        raise PreventUpdate
+
+    # Initialize progress
+    progress = min(n_intervals*0.1, 100)  # Simulate progress
+
+    # Fetch new logs from the log stream
+    log_stream.seek(0)
+    new_logs = log_stream.read()
+    log_stream.truncate(0)
+    log_stream.seek(0)
+
+    # Append new logs to the current output
+    updated_output = current_output or ""
+    updated_output += "\n" + new_logs
+
+    progress = 100
+
+    return progress, updated_output, current_results, interval_disabled
+
+
+
+# Callback to close solver modal on button click
+@app.callback(
+    Output("optimization-modal", "is_open", allow_duplicate=True),
+    Input("close-modal-btn", "n_clicks"),
+    State("optimization-modal", "is_open"),
+    prevent_initial_call=True
+)
+def close_modal(n_clicks, is_open):
+    if n_clicks:
+        return not is_open
+    return is_open
 
 
 # Callback to handle downloading entire network file as Excel
 @app.callback(
-    Output("download-network-excel", "data"),
-    Input("download-network-btn", "n_clicks"),
+    Output('download-network-excel', 'data'),
+    Input('download-network-btn', 'n_clicks'),
     prevent_initial_call=True
 )
 def download_network_data(n_clicks):
@@ -209,6 +275,7 @@ def download_network_data(n_clicks):
     output.seek(0)
 
     return dcc.send_bytes(output.getvalue(), "network_data.xlsx")
+
 
 # Callback to handle uploading replacement network file
 @app.callback(
@@ -261,6 +328,182 @@ def upload_network_data(n_clicks, contents, filename):
     return 1  # Signal that the save was successful
 
 
+# Callbacks to update capacities and display feedback in Dashboard
+@app.callback(
+    [
+        Output('network-data', 'data')
+    ],
+    [
+        Input('solar-slider', 'value'),
+        Input('wind-slider', 'value'),
+        Input('dsr-slider', 'value')
+    ],
+    prevent_initial_call=True
+)
+def update_generator_capacities(new_solar_capacity, new_wind_capacity, new_dsr_capacity):
+    # Check if the callback context has triggered the callback
+    if not ctx.triggered:
+        raise PreventUpdate
+
+    power_plants_df = load_data_table(DATABASE_PATH, 'power_plants')
+
+    # Calculate original capacities
+    solar_capacity = power_plants_df.loc[power_plants_df['type'] == 'Solar', 'capacity_mw'].sum()
+    wind_capacity = power_plants_df.loc[power_plants_df['type'] == 'Wind', 'capacity_mw'].sum()
+    dsr_capacity = power_plants_df.loc[power_plants_df['type'] == 'DSR', 'capacity_mw'].sum()
+
+    # TO ADD: code that handles the possibility that all solar/wind/DSR capacity has been set to zero
+
+    # Adjust solar capacities
+    solar_generators = power_plants_df[power_plants_df['type'] == 'Solar']
+    power_plants_df.loc[solar_generators.index, 'capacity_mw'] = \
+        solar_generators['capacity_mw'] * (new_solar_capacity * 1000 / solar_capacity)
+
+    # Adjust wind capacities
+    wind_generators = power_plants_df[power_plants_df['type'] == 'Wind']
+    power_plants_df.loc[wind_generators.index, 'capacity_mw'] = \
+        wind_generators['capacity_mw'] * (new_wind_capacity * 1000 / wind_capacity)
+
+    # Adjust dsr capacities
+    dsr_generators = power_plants_df[power_plants_df['type'] == 'DSR']
+    power_plants_df.loc[dsr_generators.index, 'capacity_mw'] = \
+        dsr_generators['capacity_mw'] * (new_dsr_capacity * 1000 / dsr_capacity)
+
+    # Save back to database
+    save_data(DATABASE_PATH, 'power_plants', power_plants_df)
+
+
+    network_data = get_network_elements_from_df(DATABASE_PATH)
+
+    return [network_data]
+
+
+# Callbacks to draw graph on Dashboard
+@app.callback(
+    [
+        Output({'type': 'dynamic-graphs-container', 'index': 'indicative_inputs'}, 'children'),
+    ],
+    [
+        Input('network-data', 'data')
+    ]
+)
+def plot_indicative_day(network_data):
+    print('Plotting indicative inputs...')
+
+    # Load demand and generation data
+    power_plants_df = load_data_table(DATABASE_PATH, 'power_plants')
+    demand_df = load_data_table(DATABASE_PATH, 'demand_profile')
+    solar_profile_df = load_data_table(DATABASE_PATH, 'solar_profile')
+    wind_profile_df = load_data_table(DATABASE_PATH, 'wind_profile')
+
+    # Ensure 'snapshot' is datetime and align profiles
+    demand_df['snapshot'] = pd.to_datetime(demand_df['snapshot'], dayfirst=True)
+    solar_profile_df['snapshot_time'] = pd.to_datetime(solar_profile_df['snapshot_time'], dayfirst=True)
+    wind_profile_df['snapshot_time'] = pd.to_datetime(wind_profile_df['snapshot_time'], dayfirst=True)
+
+    # Group demand by date and find the day with the highest demand
+    demand_df['date'] = demand_df['snapshot'].dt.date
+    daily_demand = demand_df.groupby('date')['demand_mw'].sum()
+    max_demand_date = daily_demand.idxmax()
+
+    # Filter data for the selected date
+    max_day_data = demand_df[demand_df['date'] == max_demand_date]
+    max_day_data['hour'] = max_day_data['snapshot'].dt.hour
+    hourly_demand = max_day_data.groupby('hour')['demand_mw'].sum() / 1000  # Convert MW to GW
+
+    # Align snapshots
+    common_snapshots = max_day_data['snapshot'].unique()
+    solar_profile_df = solar_profile_df[solar_profile_df['snapshot_time'].isin(common_snapshots)]
+    wind_profile_df = wind_profile_df[wind_profile_df['snapshot_time'].isin(common_snapshots)]
+
+    # Group plant types into desired categories
+    type_mapping = {
+        'Solar': 'Solar',
+        'Wind': 'Wind',
+        'DSR': 'DSR',
+        'CC': 'CC',
+    }
+    power_plants_df['group'] = power_plants_df['type'].map(type_mapping).fillna('Other')
+
+    # Prepare capacity data
+    capacity_by_hour = pd.DataFrame(index=hourly_demand.index)
+
+    for group in power_plants_df['group'].unique():
+        if group in ['Solar', 'Wind']:
+            # Handle solar and wind plants with profiles
+            plants = power_plants_df[power_plants_df['group'] == group]
+            profile_df = solar_profile_df if group == 'Solar' else wind_profile_df
+
+            # Pre-filter profiles and merge with plants
+            merged_df = plants.merge(
+                profile_df,
+                right_on='profile_name',
+                left_on='profile',
+                how='inner'
+            )
+
+            merged_df['adjusted_capacity'] = (merged_df['capacity_mw'] * merged_df['profile_y']) / 1000  # Convert MW to GW
+
+            # Sum adjusted capacities per hour
+            adjusted_capacity = merged_df.groupby('snapshot_time')['adjusted_capacity'].sum()
+            adjusted_capacity.index = adjusted_capacity.index.hour
+
+            #adjusted_capacity = adjusted_capacity.reindex(hourly_demand.index, fill_value=0)
+
+            capacity_by_hour[group] = adjusted_capacity
+        else:
+            # Aggregate other plant groups directly
+            plants = power_plants_df[power_plants_df['group'] == group]
+            total_capacity = plants['capacity_mw'].sum() / 1000  # Convert MW to GW
+            capacity_by_hour[group] = total_capacity
+
+
+    # Prepare the graph
+    fig = go.Figure()
+
+    # Add stacked bars for all plant groups
+    for group in capacity_by_hour.columns:
+        fig.add_trace(go.Bar(
+            x=capacity_by_hour.index,
+            y=capacity_by_hour[group],
+            name=f'{group} Capacity',
+            marker=dict(opacity=0.7)
+        ))
+
+    # Add line for hourly demand
+    fig.add_trace(go.Scatter(
+        x=hourly_demand.index,
+        y=hourly_demand.values,
+        mode='lines+markers',
+        name='Hourly Demand',
+        line=dict(color='red', width=3)
+    ))
+
+    # Update layout
+    fig.update_layout(
+        title=f"24-Hour Capacity vs Demand on {max_demand_date}",
+        xaxis_title="Hour of Day",
+        yaxis_title="Power (GW)",
+        barmode='stack',  # Enable stacking for bars
+        template="plotly_white",
+        autosize=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+
+    # Return the graph to the div
+    return [dcc.Graph(figure=fig)]
+
+
+########################
+# Clientside callbacks #
+########################
+
 # Clientside callback to handle drawing network diagram
 app.clientside_callback(
     ClientsideFunction(
@@ -271,31 +514,14 @@ app.clientside_callback(
     Input('network-data', 'data')
 )
 
-
-
-#@app.callback(
-#    Output('network-graph', 'zoom'),
-#    [Input('zoom-in', 'n_clicks'),
-#     Input('zoom-out', 'n_clicks'),
-#     Input('fit', 'n_clicks')],
-#    State('network-graph', 'zoom')
-#)
-#def adjust_zoom(zoom_in, zoom_out, fit, current_zoom):
-#    ctx = dash.callback_context
-#
-#    if not ctx.triggered:
-#        raise PreventUpdate
-#
-#    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
-#    if triggered_id == 'zoom-in':
-#        return min(current_zoom + 0.2, 3)  # Increase zoom, cap at maxZoom
-#    elif triggered_id == 'zoom-out':
-#        return max(current_zoom - 0.2, 0.5)  # Decrease zoom, cap at minZoom
-#    elif triggered_id == 'fit':
-#        # Use a specific fit function if desired
-#        return 1  # Reset zoom to default
-#    return current_zoom
-
-
+# Run Dash server
 if __name__ == '__main__':
     app.run_server(debug=True, host='0.0.0.0', port=8050)
+
+
+#if __name__ == "__main__":
+#
+#        app.server.config["PROFILE"] = True
+#        app.server.wsgi_app = ProfilerMiddleware(
+#            app.server.wsgi_app, sort_by=("cumtime", "tottime"), restrictions=[50]
+#        )

@@ -5,18 +5,16 @@ import dash_bootstrap_components as dbc
 from dash.dependencies import ClientsideFunction
 
 import pandas as pd
-import numpy as np
 import io
-import json
 import base64
 import os
 import tempfile
-import plotly.graph_objects as go
 
 from functools import lru_cache
 
-from page_layout import display_page, get_menu_layout, set_active_links, generate_result_charts, render_graphs
+from page_layout import display_page, get_menu_layout, set_active_links, generate_result_charts
 from external_functions import load_data, save_data, load_data_table, get_network_elements_from_df, create_network, run_optimization
+from results_charts import generate_dashboard_chart
 
 from external_functions import log_stream, interval_disabled  # Import global variables
 
@@ -180,8 +178,7 @@ def run_optimization_callback(optimization_intent):
             print("Optimization complete! storing results.") # Check to see if it completes
             interval_disabled = True # disable interval as soon as result or exception occurs.
 
-            graphs_list = generate_result_charts(optimization_results)
-            charts_html = render_graphs(graphs_list)
+            charts_html = generate_result_charts(optimization_results)
             run_output = "Optimization complete!"
 
             return False, optimization_results, interval_disabled, run_output, charts_html, False  # Return the actual result
@@ -390,114 +387,7 @@ def update_generator_capacities(new_solar_capacity, new_wind_capacity, new_dsr_c
 def plot_indicative_day(network_data):
     print('Plotting indicative inputs...')
 
-    # Load demand and generation data
-    power_plants_df = load_data_table(DATABASE_PATH, 'power_plants')
-    demand_df = load_data_table(DATABASE_PATH, 'demand_profile')
-    solar_profile_df = load_data_table(DATABASE_PATH, 'solar_profile')
-    wind_profile_df = load_data_table(DATABASE_PATH, 'wind_profile')
-
-    # Ensure 'snapshot' is datetime and align profiles
-    demand_df['snapshot'] = pd.to_datetime(demand_df['snapshot'], dayfirst=True)
-    solar_profile_df['snapshot_time'] = pd.to_datetime(solar_profile_df['snapshot_time'], dayfirst=True)
-    wind_profile_df['snapshot_time'] = pd.to_datetime(wind_profile_df['snapshot_time'], dayfirst=True)
-
-    # Group demand by date and find the day with the highest demand
-    demand_df['date'] = demand_df['snapshot'].dt.date
-    daily_demand = demand_df.groupby('date')['demand_mw'].sum()
-    max_demand_date = daily_demand.idxmax()
-
-    # Filter data for the selected date
-    max_day_data = demand_df[demand_df['date'] == max_demand_date]
-    max_day_data['hour'] = max_day_data['snapshot'].dt.hour
-    hourly_demand = max_day_data.groupby('hour')['demand_mw'].sum() / 1000  # Convert MW to GW
-
-    # Align snapshots
-    common_snapshots = max_day_data['snapshot'].unique()
-    solar_profile_df = solar_profile_df[solar_profile_df['snapshot_time'].isin(common_snapshots)]
-    wind_profile_df = wind_profile_df[wind_profile_df['snapshot_time'].isin(common_snapshots)]
-
-    # Group plant types into desired categories
-    type_mapping = {
-        'Solar': 'Solar',
-        'Wind': 'Wind',
-        'DSR': 'DSR',
-        'CC': 'CC',
-    }
-    power_plants_df['group'] = power_plants_df['type'].map(type_mapping).fillna('Other')
-
-    # Prepare capacity data
-    capacity_by_hour = pd.DataFrame(index=hourly_demand.index)
-
-    for group in power_plants_df['group'].unique():
-        if group in ['Solar', 'Wind']:
-            # Handle solar and wind plants with profiles
-            plants = power_plants_df[power_plants_df['group'] == group]
-            profile_df = solar_profile_df if group == 'Solar' else wind_profile_df
-
-            # Pre-filter profiles and merge with plants
-            merged_df = plants.merge(
-                profile_df,
-                right_on='profile_name',
-                left_on='profile',
-                how='inner'
-            )
-
-            merged_df['adjusted_capacity'] = (merged_df['capacity_mw'] * merged_df['profile_y']) / 1000  # Convert MW to GW
-
-            # Sum adjusted capacities per hour
-            adjusted_capacity = merged_df.groupby('snapshot_time')['adjusted_capacity'].sum()
-            adjusted_capacity.index = adjusted_capacity.index.hour
-
-            #adjusted_capacity = adjusted_capacity.reindex(hourly_demand.index, fill_value=0)
-
-            capacity_by_hour[group] = adjusted_capacity
-        else:
-            # Aggregate other plant groups directly
-            plants = power_plants_df[power_plants_df['group'] == group]
-            total_capacity = plants['capacity_mw'].sum() / 1000  # Convert MW to GW
-            capacity_by_hour[group] = total_capacity
-
-
-    # Prepare the graph
-    fig = go.Figure()
-
-    # Add stacked bars for all plant groups
-    for group in capacity_by_hour.columns:
-        fig.add_trace(go.Bar(
-            x=capacity_by_hour.index,
-            y=capacity_by_hour[group],
-            name=f'{group} Capacity',
-            marker=dict(opacity=0.7)
-        ))
-
-    # Add line for hourly demand
-    fig.add_trace(go.Scatter(
-        x=hourly_demand.index,
-        y=hourly_demand.values,
-        mode='lines+markers',
-        name='Hourly Demand',
-        line=dict(color='red', width=3)
-    ))
-
-    # Update layout
-    fig.update_layout(
-        title=f"24-Hour Capacity vs Demand on {max_demand_date}",
-        xaxis_title="Hour of Day",
-        yaxis_title="Power (GW)",
-        barmode='stack',  # Enable stacking for bars
-        template="plotly_white",
-        autosize=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
-    )
-
-    # Return the graph to the div
-    return [dcc.Graph(figure=fig)]
+    return generate_dashboard_chart()
 
 
 ########################
@@ -514,14 +404,10 @@ app.clientside_callback(
     Input('network-data', 'data')
 )
 
-# Run Dash server
+
+###################
+# Run Dash server #
+###################
+
 if __name__ == '__main__':
     app.run_server(debug=True, host='0.0.0.0', port=8050)
-
-
-#if __name__ == "__main__":
-#
-#        app.server.config["PROFILE"] = True
-#        app.server.wsgi_app = ProfilerMiddleware(
-#            app.server.wsgi_app, sort_by=("cumtime", "tottime"), restrictions=[50]
-#        )

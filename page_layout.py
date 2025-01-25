@@ -1,11 +1,10 @@
 import dash_bootstrap_components as dbc
-from dash import html, dcc, dash_table, Input, Output, State
-import pandas as pd
-import json
-import plotly.graph_objects as go
+from dash import html, dcc, dash_table
 
 from external_functions import load_data, create_network, get_network_elements, get_network_elements_from_df, calc_aggregate_capacities
 from model_checks import check_capacity_vs_demand, check_nodal_capacity_vs_demand, export_network_to_excel
+
+from results_charts import generate_result_charts
 
 DATABASE_PATH = 'power_system.db'
 
@@ -175,8 +174,7 @@ def display_page(pathname, optimization_intent, optimization_results):
             run_output = "Loaded previous results"
 
             # Generate charts from stored results
-            graphs_list = generate_result_charts(optimization_results_dict)
-            charts_html = render_graphs(graphs_list)
+            charts_html = generate_result_charts(optimization_results_dict)
         else:
             run_output = "Run optimization using the button to the left"
             charts_html = "No optimization results available"
@@ -359,7 +357,7 @@ def get_menu_layout():
         dbc.Nav(
             [
                 dbc.NavLink(
-                    [html.I(className="bi bi-diagram-3-fill me-2"), "Dashboard"],
+                    [html.I(className="bi bi-speedometer me-2"), "Dashboard"],
                     href="/dashboard",
                     id="dashboard-link",
                     active=True,
@@ -449,156 +447,3 @@ def get_menu_layout():
 
 
 
-def generate_result_charts(optimization_results):
-
-    # If optimization results are not available, return an empty list
-    if not optimization_results:
-        return []   
-
-    print("Generating result charts...")
-
-    snapshots = pd.to_datetime(optimization_results["snapshots"])
-    generation_data = pd.DataFrame(optimization_results["generators_t_p"]["data"])
-    generator_types = optimization_results["generators_t_p"]["types"]
-    shadow_prices = pd.DataFrame(optimization_results["buses_t_marginal_price"])
-    storage_data = pd.DataFrame(optimization_results.get("storage_units_t_p", {}))
-
-    graphs_list = []
-
-# Chart 1: Pie Chart of Total Generation by Type
-    total_generation = generation_data.sum()
-    total_generation_by_type = total_generation.groupby(generator_types).sum()
-    total_generation_by_type = total_generation_by_type[total_generation_by_type > 0]  # Exclude zero values from graph
-
-    pie_fig = go.Figure(
-        data=[go.Pie(
-            labels=total_generation_by_type.index,
-            values=total_generation_by_type.values,
-            textinfo='label+percent',
-            hoverinfo='label+value',
-            marker=dict(colors=['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A'])
-        )]
-    )
-
-    pie_fig.update_layout(
-        title=f"Total Generation by Type ({snapshots.min().strftime('%Y-%m-%d')} to {snapshots.max().strftime('%Y-%m-%d')})",
-        template="plotly_white",
-        autosize=True,
-        margin=dict(l=10, r=10, t=40, b=10)
-    )
-
-    graphs_list.append({
-        'id': 'total-generation-pie',
-        'figure': pie_fig,
-        'title': f"Total Generation by Type ({snapshots.min().strftime('%Y-%m-%d')} to {snapshots.max().strftime('%Y-%m-%d')})",
-        'raw_data': total_generation_by_type.to_dict()
-    })
-
-    # Chart 2: Price-Duration Curve for Each Node
-    price_duration_fig = go.Figure()
-    for node in shadow_prices.columns:
-        sorted_prices = shadow_prices[node].sort_values(ascending=False).reset_index(drop=True)
-        price_duration_fig.add_trace(go.Scatter(
-            x=sorted_prices.index,
-            y=sorted_prices.values,
-            mode='lines',
-            name=node
-        ))
-    price_duration_fig.update_layout(
-        title="Price-Duration Curve",
-        xaxis_title="Hours",
-        yaxis_title="Price (GBP/MWh)",
-        template="plotly_white",
-        autosize=True,
-        margin=dict(l=10, r=10, t=40, b=10)
-    )
-    graphs_list.append({
-        'id': 'price-duration-curve',
-        'figure': price_duration_fig,
-        'title': 'Price-Duration Curve',
-        'raw_data': shadow_prices.to_dict()
-    })
-
-    # Chart 3: Stacked Area Chart of Typical Daily Generation Profile by Type (Including Storage)
-    generation_data.index = pd.to_datetime(generation_data.index)
-    aligned_generator_types = pd.Series(generator_types).reindex(generation_data.columns)
-
-    # Transpose for grouping on columns and aggregate hourly
-    hourly_generation_by_type = generation_data.T.groupby(aligned_generator_types).sum().T.groupby(generation_data.index.hour).mean()
-
-    # Remove types with all zero values
-    hourly_generation_by_type = hourly_generation_by_type.loc[:, (hourly_generation_by_type != 0).any(axis=0)]
-
-    # Aggregate storage data for charging and discharging
-    storage_data.index = pd.to_datetime(storage_data.index)
-    hourly_storage = storage_data.groupby(storage_data.index.hour).sum()
-
-    stacked_area_fig = go.Figure()
-
-    # Add generation types
-    for generation_type in hourly_generation_by_type.columns:
-        stacked_area_fig.add_trace(go.Scatter(
-            x=hourly_generation_by_type.index,
-            y=hourly_generation_by_type[generation_type],
-            mode='lines',
-            stackgroup='one',
-            name=generation_type
-        ))
-
-    # Add storage charging (negative values) and discharging (positive values)
-    stacked_area_fig.add_trace(go.Scatter(
-        x=hourly_storage.index,
-        y=hourly_storage.clip(upper=0).sum(axis=1),  # Charging as negative
-        mode='lines',
-        stackgroup='one',
-        name="Storage (Charging)",
-        line=dict(dash='dot', color='blue')
-    ))
-    stacked_area_fig.add_trace(go.Scatter(
-        x=hourly_storage.index,
-        y=hourly_storage.clip(lower=0).sum(axis=1),  # Discharging as positive
-        mode='lines',
-        stackgroup='one',
-        name="Storage (Discharging)",
-        line=dict(dash='dot', color='orange')
-    ))
-
-    stacked_area_fig.update_layout(
-        title="Typical Daily Generation Profile by Type (Including Storage)",
-        xaxis_title="Hour of Day",
-        yaxis_title="Average Generation (MW)",
-        template="plotly_white",
-        autosize=True,
-        margin=dict(l=10, r=10, t=40, b=10)
-    )
-
-    graphs_list.append({
-        'id': 'daily-generation-profile',
-        'figure': stacked_area_fig,
-        'title': 'Typical Daily Generation Profile by Type (Including Storage)',
-        'raw_data': {
-            "generation": hourly_generation_by_type.to_dict(),
-            "storage": hourly_storage.to_dict()
-        }
-    })
-
-
-    return graphs_list
-
-def render_graphs(graphs_list):
-    if not graphs_list:
-        return html.Div("No graphs to display")
-
-    print("Rendering graphs...")
-
-    graph_1 = graphs_list[0]['figure'] # Generation by type pie Chart
-    graph_2 = graphs_list[1]['figure'] # Price-Duration Curves
-    graph_3 = graphs_list[2]['figure'] # Typical diurnal generation profile
-
-    graphs_html = html.Div([
-        dcc.Graph(figure=graph_1, style={'flex': '1', 'margin': '5px'}),
-        dcc.Graph(figure=graph_2, style={'flex': '2', 'margin': '5px'}),
-        dcc.Graph(figure=graph_3, style={'flex': '3', 'margin': '5px'}),
-    ], style={'display': 'flex', 'justifyContent': 'flex-start', 'width': '100%'})
-
-    return graphs_html

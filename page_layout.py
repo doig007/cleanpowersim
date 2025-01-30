@@ -181,8 +181,8 @@ def display_page(pathname, optimization_intent, optimization_results):
 
         tab_content = html.Div([
             html.H2("Optimisation Results", className='text-center my-4'),
-            html.Div(id="run-output", style={'marginTop': '20px', 'textAlign': 'center'}, children=run_output),
-            html.Div(id="dynamic-graphs-container", style={'marginTop': '20px'}, children=charts_html)
+            html.Div(id={'type': 'run-output', 'index': 'results'}, children=run_output),
+            html.Div(id={'type': 'dynamic-graphs-container', 'index': 'results'}, children=charts_html)
         ])
 
 

@@ -153,8 +153,8 @@ def navigate_to_results_and_set_intent(n_clicks, optimization_modal):
         Output('optimization-intent', 'data', allow_duplicate=True),  # Reset the intent after running
         Output('optimization-results', 'data', allow_duplicate=True),  # Store the results
         Output('optimization-interval', 'disabled', allow_duplicate=True), # Set the interval for async running of optimization
-        Output('run-output', 'children', allow_duplicate=True), # Output to display the result of the optimization
-        Output('dynamic-graphs-container', 'children', allow_duplicate=True), # Output to display the charts of the optimization result
+        Output({'type': 'run-output', 'index': 'results'}, 'children', allow_duplicate=True), # Output to display the result of the optimization
+        Output({'type': 'dynamic-graphs-container', 'index': 'results'}, 'children', allow_duplicate=True), # Output to display the charts of the optimization result
         Output("optimization-modal", "is_open", allow_duplicate=True), # Close the modal after optimization
     ],
     [

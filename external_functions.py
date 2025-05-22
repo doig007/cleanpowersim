@@ -253,72 +253,116 @@ def get_network_elements(network):
     return json.dumps(clean_data)
 
 
-def get_network_elements_from_df(DATABASE_PATH):
+def get_network_elements_from_df(DATABASE_PATH, power_plants_df_override=None, buses_df_override=None, lines_df_override=None, storage_units_df_override=None):
     nodes_data = []
     edges_data = []
 
-    power_plants_df, buses_df, lines_df, storage_units_df = load_data_for_diagram(DATABASE_PATH)
+    # Load data: use override if provided, else load from DB
+    if power_plants_df_override is not None:
+        power_plants_df = power_plants_df_override
+    else:
+        power_plants_df = load_data_table(DATABASE_PATH, 'power_plants')
+
+    if buses_df_override is not None:
+        buses_df = buses_df_override.set_index('id' if 'id' in buses_df_override.columns else buses_df_override.index.name)
+    else:
+        buses_df = load_data_table(DATABASE_PATH, 'buses').set_index('id')
+
+    if lines_df_override is not None:
+        lines_df = lines_df_override
+    else:
+        lines_df = load_data_table(DATABASE_PATH, 'lines')
+
+    if storage_units_df_override is not None:
+        storage_units_df = storage_units_df_override
+    else:
+        storage_units_df = load_data_table(DATABASE_PATH, 'storage_units')
+
 
     # Buses
-    for bus in buses_df.itertuples():
+    # Ensure buses_df has 'id' in columns if it's not the index, for itertuples
+    processed_buses_df = buses_df.reset_index() if buses_df.index.name == 'id' or 'id' in buses_df.columns else buses_df
+    if 'id' not in processed_buses_df.columns and 'Index' not in processed_buses_df.columns: # if 'id' was index and reset
+        processed_buses_df.rename(columns={'index':'id'}, inplace=True)
+
+
+    for bus_row in processed_buses_df.itertuples():
+        # bus_id = bus_row.id if hasattr(bus_row, 'id') else bus_row.Index # Access 'id' or 'Index'
+        bus_id_attr = 'id' if 'id' in processed_buses_df.columns else 'Index'
+        bus_id = getattr(bus_row, bus_id_attr)
+
         nodes_data.append({
-            'id': str(bus.Index),
-            'name': bus.name,
-            'label': bus.name,
+            'id': str(bus_id),
+            'name': bus_row.name,
+            'label': bus_row.name,
             'type': 'bus',
-            'x': bus.longitude,
-            'y': bus.latitude
+            'x': bus_row.longitude,
+            'y': bus_row.latitude
         })
 
     # Edges (Lines)
-    for line in lines_df.itertuples():
+    for line_row in lines_df.itertuples():
         edges_data.append({
-            'source': str(line.from_bus),
-            'target': str(line.to_bus),
-            'length': line.length_km,
-            'capacity': line.max_capacity_mw,
-            'label': f'{line.max_capacity_mw:.0f}MW',
+            'source': str(line_row.from_bus),
+            'target': str(line_row.to_bus),
+            'length': line_row.length_km,
+            'capacity': line_row.max_capacity_mw,
+            'label': f'{line_row.max_capacity_mw:.0f}MW',
             'type': 'primary'
         })
     
     # Generators
-    for gen in power_plants_df.itertuples():
-        bus = buses_df.loc[gen.bus_id]
+    for gen_row in power_plants_df.itertuples():
+        # Ensure bus_id is correctly accessed (it might be int or string due to various sources)
+        bus_id_val = int(gen_row.bus_id) if isinstance(gen_row.bus_id, (str, float)) and str(gen_row.bus_id).isdigit() else gen_row.bus_id
+        
+        # Check if bus_id_val exists in the index of buses_df
+        if bus_id_val not in buses_df.index:
+            print(f"Warning: Bus ID {bus_id_val} for generator {gen_row.name} not found in buses_df. Available bus IDs: {buses_df.index.tolist()}")
+            continue # Skip this generator if its bus is not found
+            
+        bus = buses_df.loc[bus_id_val]
 
-        if gen.capacity_mw > 0:
+        if gen_row.capacity_mw > 0:
             nodes_data.append({
-                'id': 'gen'+str(gen.id),
-                'name': str(gen.name),
-                'label': f'{gen.name}({gen.capacity_mw:.0f}MW)',
+                'id': 'gen'+str(gen_row.id),
+                'name': str(gen_row.name),
+                'label': f'{gen_row.name}({gen_row.capacity_mw:.0f}MW)',
                 'type': 'generator',
-                'fuel': gen.type,  # To identify wind and solar plant
-                'capacity': gen.capacity_mw,
-                'x': bus['longitude'],
-                'y': bus['latitude']
+                'fuel': gen_row.type,  # To identify wind and solar plant
+                'capacity': gen_row.capacity_mw,
+                'x': bus['longitude'], # bus is a Series, access normally
+                'y': bus['latitude']  # bus is a Series, access normally
             })
             # Add an edge connecting generator to its bus
             edges_data.append({
-                'source': 'gen'+str(gen.id),
-                'target': str(gen.bus_id),
+                'source': 'gen'+str(gen_row.id),
+                'target': str(gen_row.bus_id),
                 'type': 'secondary'
             })
     
     # Storage Units
-    for _, storage in storage_units_df.itertuples():
-        bus = buses_df.loc[storage.bus_id]
+    for storage_row in storage_units_df.itertuples():
+        bus_id_val = int(storage_row.bus_id) if isinstance(storage_row.bus_id, (str, float)) and str(storage_row.bus_id).isdigit() else storage_row.bus_id
+        
+        if bus_id_val not in buses_df.index:
+            print(f"Warning: Bus ID {bus_id_val} for storage unit {storage_row.name} not found in buses_df. Available bus IDs: {buses_df.index.tolist()}")
+            continue # Skip this storage unit if its bus is not found
+
+        bus = buses_df.loc[bus_id_val]
         nodes_data.append({
-            'id': 'storage'+str(storage.id),
-            'name': str(storage.name),
-            'label': storage.name,
+            'id': 'storage'+str(storage_row.id),
+            'name': str(storage_row.name),
+            'label': storage_row.name,
             'type': 'storage',
-            'capacity': storage.capacity_mw,
-            'x': bus['longitude'],
-            'y': bus['latitude']
+            'capacity': storage_row.capacity_mw,
+            'x': bus['longitude'], # bus is a Series, access normally
+            'y': bus['latitude']   # bus is a Series, access normally
         })
         # Add an edge connecting storage to its bus
         edges_data.append({
-            'source': 'storage'+str(storage.id),
-            'target': str(storage.bus_id),
+            'source': 'storage'+str(storage_row.id),
+            'target': str(storage_row.bus_id),
             'type': 'secondary'
         })
 
@@ -332,13 +376,21 @@ def get_network_elements_from_df(DATABASE_PATH):
     return json.dumps(clean_data)
 
 
-def calc_aggregate_capacities(DATABASE_PATH):
+def calc_aggregate_capacities(DATABASE_PATH, power_plants_df_override=None): # Allow override for consistency
 
-    power_plants_df, buses_df, lines_df, storage_units_df = load_data_for_diagram(DATABASE_PATH)
+    if power_plants_df_override is not None:
+        power_plants_df_to_use = power_plants_df_override
+    else:
+        # Fallback to loading from DB if no override is provided
+        # Note: This part of calc_aggregate_capacities might need its own set of overrides
+        # if it's meant to reflect in-memory changes from various sources.
+        # For now, just using power_plants.
+        power_plants_df_to_use = load_data_table(DATABASE_PATH, 'power_plants')
 
-    solar_capacity = power_plants_df.loc[power_plants_df['type'] == 'Solar', 'capacity_mw'].sum()
-    wind_capacity = power_plants_df.loc[power_plants_df['type'] == 'Wind', 'capacity_mw'].sum()
-    dsr_capacity = power_plants_df.loc[power_plants_df['type'] == 'DSR', 'capacity_mw'].sum()
+
+    solar_capacity = power_plants_df_to_use.loc[power_plants_df_to_use['type'] == 'Solar', 'capacity_mw'].sum()
+    wind_capacity = power_plants_df_to_use.loc[power_plants_df_to_use['type'] == 'Wind', 'capacity_mw'].sum()
+    dsr_capacity = power_plants_df_to_use.loc[power_plants_df_to_use['type'] == 'DSR', 'capacity_mw'].sum()
 
     return solar_capacity, wind_capacity, dsr_capacity
 

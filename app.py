@@ -46,6 +46,7 @@ app.layout = dbc.Container([
         dbc.Col([
             dcc.Location(id='url', refresh=False),
             html.Div(id='page-content'),  # Main content area
+            html.Div(id='upload-feedback'), # For upload status messages
             
             # Modal to display progress and solver output
             dbc.Modal(
@@ -70,7 +71,16 @@ app.layout = dbc.Container([
     dcc.Interval(id="optimization-interval", interval=1000, n_intervals=0, disabled=True),  # Interval for updates
     dcc.Store(id='optimization-progress-store', data=0, storage_type='memory'),  # Store for progress updates
     dcc.Store(id='optimization-results', data=None, storage_type='memory'),  # Store to keep optimization results
-    dcc.Store(id={'type': 'save-status', 'index': 'global'}, data=0, storage_type='memory')
+    dcc.Store(id={'type': 'save-status', 'index': 'global'}, data=0, storage_type='memory'),
+    # Stores for edited table data
+    dcc.Store(id={'type': 'edited-table-store', 'index': 'power-plants'}, storage_type='memory'),
+    dcc.Store(id={'type': 'edited-table-store', 'index': 'buses'}, storage_type='memory'),
+    dcc.Store(id={'type': 'edited-table-store', 'index': 'lines'}, storage_type='memory'),
+    dcc.Store(id={'type': 'edited-table-store', 'index': 'demand-profile'}, storage_type='memory'),
+    dcc.Store(id={'type': 'edited-table-store', 'index': 'storage-units'}, storage_type='memory'),
+    dcc.Store(id={'type': 'edited-table-store', 'index': 'snapshots'}, storage_type='memory'),
+    dcc.Store(id={'type': 'edited-table-store', 'index': 'wind-profile'}, storage_type='memory'),
+    dcc.Store(id={'type': 'edited-table-store', 'index': 'solar-profile'}, storage_type='memory')
 ], fluid=True)
 
 ############################
@@ -104,7 +114,8 @@ def update_active_links(pathname):
 
 # Callback for saving changes in the Editor pages
 @app.callback(
-    Output({'type': 'save-status', 'index': MATCH}, 'data', allow_duplicate=True),
+    [Output({'type': 'save-status', 'index': MATCH}, 'data', allow_duplicate=True),
+     Output({'type': 'edited-table-store', 'index': MATCH}, 'data', allow_duplicate=True)],
     [Input({'type': 'save-changes-btn', 'index': ALL}, 'n_clicks')],
     [State({'type': 'data-table', 'index': ALL}, 'data')],
     prevent_initial_call=True
@@ -112,18 +123,29 @@ def update_active_links(pathname):
 def save_changes(n_clicks_list, tables_data_list):
 
     if (not ctx.triggered) or (not any(n_clicks_list)):
-        return 0
+        raise PreventUpdate
 
     # Determine which button was triggered and get its corresponding index
-    triggered = ctx.triggered[0]['prop_id']
-    triggered_index = triggered.split('"index":"')[1].split('"')[0].strip()
+    triggered_button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    triggered_index = dash.callback_context.inputs_list[0][0]['id']['index']
 
-    if n_clicks_list[0] > 0 and tables_data_list[0] is not None:
-        print("saving: "+ triggered_index)
-        df = pd.DataFrame(tables_data_list[0])
-        save_data(DATABASE_PATH, triggered_index.replace('-', '_'), df)
 
-    return 1
+    # Find the corresponding table data
+    table_data = None
+    for i, state_input in enumerate(dash.callback_context.states_list[0]):
+        if state_input['id']['index'] == triggered_index:
+            table_data = tables_data_list[i]
+            break
+    
+    if table_data is None:
+        raise PreventUpdate
+
+    df = pd.DataFrame(table_data)
+    # Instead of saving to DB, store in dcc.Store
+    # save_data(DATABASE_PATH, triggered_index.replace('-', '_'), df)
+    print(f"Storing data for {triggered_index} in dcc.Store")
+
+    return 1, df.to_dict('records')
 
 
 # Callback to run optimization (via setting intent) and navigate to results page when the run optimization button is clicked
@@ -157,19 +179,59 @@ def navigate_to_results_and_set_intent(n_clicks, optimization_modal):
         Output({'type': 'dynamic-graphs-container', 'index': 'results'}, 'children', allow_duplicate=True), # Output to display the charts of the optimization result
         Output("optimization-modal", "is_open", allow_duplicate=True), # Close the modal after optimization
     ],
+    [Input('optimization-intent', 'data')],
     [
-        Input('optimization-intent', 'data')
+        State({'type': 'edited-table-store', 'index': 'power-plants'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'buses'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'lines'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'demand-profile'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'storage-units'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'snapshots'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'wind-profile'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'solar-profile'}, 'data')
     ],
     prevent_initial_call=True
 )
-def run_optimization_callback(optimization_intent):
+def run_optimization_callback(optimization_intent, 
+                               edited_power_plants, edited_buses, edited_lines, 
+                               edited_demand, edited_storage_units, edited_snapshots, 
+                               edited_wind_profile, edited_solar_profile):
     global interval_disabled
+    # Access global DataFrames (loaded at app start)
+    global power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df
+
 
     if optimization_intent:     
         print("Running optimization...")
-        # Load network data and create network object HERE, in the main thread
-        power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df  = load_data(DATABASE_PATH)
-        network = create_network(power_plants_df, storage_units_df, buses_df, lines_df, demand_df, snapshots_df, wind_profile_df, solar_profile_df)
+
+        # Function to get DataFrame, preferring edited data from store, else global copy
+        def get_df_from_store_or_global(edited_data, global_df_ref):
+            if edited_data:
+                print(f"Using edited data for {global_df_ref.attrs.get('name', 'unknown table')}")
+                return pd.DataFrame(edited_data)
+            else:
+                print(f"Using global data for {global_df_ref.attrs.get('name', 'unknown table')}")
+                # Add a name attribute to global dfs for easier logging if not already present
+                if 'name' not in global_df_ref.attrs:
+                    # This is a bit of a hack for logging; ideally, names are known
+                    for name, df_val in globals().items():
+                        if df_val is global_df_ref:
+                            global_df_ref.attrs['name'] = name
+                            break
+                return global_df_ref.copy() # Use a copy of the global DataFrame
+
+        # Prepare DataFrames for network creation
+        current_power_plants_df = get_df_from_store_or_global(edited_power_plants, power_plants_df)
+        current_buses_df = get_df_from_store_or_global(edited_buses, buses_df)
+        current_lines_df = get_df_from_store_or_global(edited_lines, lines_df)
+        current_demand_df = get_df_from_store_or_global(edited_demand, demand_df)
+        current_storage_units_df = get_df_from_store_or_global(edited_storage_units, storage_units_df)
+        current_snapshots_df = get_df_from_store_or_global(edited_snapshots, snapshots_df)
+        current_wind_profile_df = get_df_from_store_or_global(edited_wind_profile, wind_profile_df)
+        current_solar_profile_df = get_df_from_store_or_global(edited_solar_profile, solar_profile_df)
+        
+        network = create_network(current_power_plants_df, current_storage_units_df, current_buses_df, current_lines_df, 
+                                 current_demand_df, current_snapshots_df, current_wind_profile_df, current_solar_profile_df)
 
         # Run optimization directly (no threading)
         optimization_results = run_optimization(network)  # Get the results directly
@@ -252,23 +314,74 @@ def close_modal(n_clicks, is_open):
 @app.callback(
     Output('download-network-excel', 'data'),
     Input('download-network-btn', 'n_clicks'),
+    [
+        State({'type': 'edited-table-store', 'index': 'power-plants'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'buses'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'lines'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'demand-profile'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'storage-units'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'snapshots'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'wind-profile'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'solar-profile'}, 'data')
+    ],
     prevent_initial_call=True
 )
-def download_network_data(n_clicks):
-    # Load data from the database
-    power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df = load_data(DATABASE_PATH)
+def download_network_data(n_clicks,
+                           edited_power_plants, edited_buses, edited_lines,
+                           edited_demand, edited_storage_units, edited_snapshots,
+                           edited_wind_profile, edited_solar_profile):
+    if not n_clicks:
+        raise PreventUpdate
+
+    # Access global DataFrames (loaded at app start)
+    global power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df
+
+    # Helper function (similar to run_optimization_callback)
+    def get_df_for_download(edited_data, global_df_ref):
+        if edited_data:
+            df = pd.DataFrame(edited_data)
+            # Attempt to convert known date columns back to datetime if they were stringified
+            # This is important for Excel to recognize them as dates.
+            if global_df_ref.attrs.get('name') == 'demand_df' and 'snapshot' in df.columns:
+                df['snapshot'] = pd.to_datetime(df['snapshot'])
+            elif global_df_ref.attrs.get('name') == 'snapshots_df' and 'snapshot_time' in df.columns:
+                 df['snapshot_time'] = pd.to_datetime(df['snapshot_time'])
+            return df
+        else:
+            return global_df_ref.copy()
+
+    # Prepare DataFrames for Excel export
+    # Assigning names to global_df_ref.attrs for the helper if not already done (as in run_optimization)
+    # This should ideally be done once at app startup.
+    if 'name' not in power_plants_df.attrs: power_plants_df.attrs['name'] = 'power_plants_df'
+    if 'name' not in buses_df.attrs: buses_df.attrs['name'] = 'buses_df'
+    if 'name' not in lines_df.attrs: lines_df.attrs['name'] = 'lines_df'
+    if 'name' not in demand_df.attrs: demand_df.attrs['name'] = 'demand_df'
+    if 'name' not in storage_units_df.attrs: storage_units_df.attrs['name'] = 'storage_units_df'
+    if 'name' not in snapshots_df.attrs: snapshots_df.attrs['name'] = 'snapshots_df'
+    if 'name' not in wind_profile_df.attrs: wind_profile_df.attrs['name'] = 'wind_profile_df'
+    if 'name' not in solar_profile_df.attrs: solar_profile_df.attrs['name'] = 'solar_profile_df'
+    
+    current_power_plants_df = get_df_for_download(edited_power_plants, power_plants_df)
+    current_buses_df = get_df_for_download(edited_buses, buses_df)
+    current_lines_df = get_df_for_download(edited_lines, lines_df)
+    current_demand_df = get_df_for_download(edited_demand, demand_df)
+    current_storage_units_df = get_df_for_download(edited_storage_units, storage_units_df)
+    current_snapshots_df = get_df_for_download(edited_snapshots, snapshots_df)
+    current_wind_profile_df = get_df_for_download(edited_wind_profile, wind_profile_df)
+    current_solar_profile_df = get_df_for_download(edited_solar_profile, solar_profile_df)
 
     # Create an Excel file in memory
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        power_plants_df.to_excel(writer, sheet_name='Power Plants', index=False)
-        buses_df.to_excel(writer, sheet_name='Buses', index=False)
-        lines_df.to_excel(writer, sheet_name='Transmission Lines', index=False)
-        demand_df.to_excel(writer, sheet_name='Demand Profile', index=False)
-        storage_units_df.to_excel(writer, sheet_name='Storage Units', index=False)
-        snapshots_df.to_excel(writer, sheet_name='Snapshots', index=False)
-        wind_profile_df.to_excel(writer, sheet_name='Wind Profile', index=False)
-        solar_profile_df.to_excel(writer, sheet_name='Solar Profile', index=False)
+        current_power_plants_df.to_excel(writer, sheet_name='Power Plants', index=False)
+        current_buses_df.to_excel(writer, sheet_name='Buses', index=False)
+        current_lines_df.to_excel(writer, sheet_name='Transmission Lines', index=False)
+        current_demand_df.to_excel(writer, sheet_name='Demand Profile', index=False)
+        current_storage_units_df.to_excel(writer, sheet_name='Storage Units', index=False)
+        current_snapshots_df.to_excel(writer, sheet_name='Snapshots', index=False)
+        current_wind_profile_df.to_excel(writer, sheet_name='Wind Profile', index=False)
+        current_solar_profile_df.to_excel(writer, sheet_name='Solar Profile', index=False)
     output.seek(0)
 
     return dcc.send_bytes(output.getvalue(), "network_data.xlsx")
@@ -276,103 +389,182 @@ def download_network_data(n_clicks):
 
 # Callback to handle uploading replacement network file
 @app.callback(
-    Output({'type': 'save-status', 'index': MATCH}, 'data', allow_duplicate=True),
+    [
+        Output('upload-feedback', 'children'),
+        Output({'type': 'edited-table-store', 'index': 'power-plants'}, 'data', allow_duplicate=True),
+        Output({'type': 'edited-table-store', 'index': 'buses'}, 'data', allow_duplicate=True),
+        Output({'type': 'edited-table-store', 'index': 'lines'}, 'data', allow_duplicate=True),
+        Output({'type': 'edited-table-store', 'index': 'demand-profile'}, 'data', allow_duplicate=True),
+        Output({'type': 'edited-table-store', 'index': 'storage-units'}, 'data', allow_duplicate=True),
+        Output({'type': 'edited-table-store', 'index': 'snapshots'}, 'data', allow_duplicate=True),
+        Output({'type': 'edited-table-store', 'index': 'wind-profile'}, 'data', allow_duplicate=True),
+        Output({'type': 'edited-table-store', 'index': 'solar-profile'}, 'data', allow_duplicate=True)
+    ],
     Input('upload-network-btn', 'n_clicks'),
-    State('upload-network-file', 'contents'),
-    State('upload-network-file', 'filename'),
+    [State('upload-network-file', 'contents'),
+     State('upload-network-file', 'filename')],
     prevent_initial_call=True
 )
 def upload_network_data(n_clicks, contents, filename):
     if not contents or n_clicks is None:
         raise PreventUpdate
-
+    
     content_type, content_string = contents.split(',')
     decoded = base64.b64decode(content_string)
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
-        temp_file.write(decoded)
-        temp_file_path = temp_file.name
-
-    # Load the uploaded Excel file into Pandas DataFrames
+    temp_file_path = None  # Initialize to ensure it's defined in finally
     try:
-        with pd.ExcelFile(temp_file_path) as xls:
-            power_plants_df = pd.read_excel(xls, 'Power Plants')
-            buses_df = pd.read_excel(xls, 'Buses')
-            lines_df = pd.read_excel(xls, 'Transmission Lines')
-            demand_df = pd.read_excel(xls, 'Demand Profile', parse_dates=['snapshot'])
-            storage_units_df = pd.read_excel(xls, 'Storage Units')
-            snapshots_df = pd.read_excel(xls, 'Snapshots', parse_dates=['snapshot_time'])
-            wind_profile_df = pd.read_excel(xls, 'Wind Profile')
-            solar_profile_df = pd.read_excel(xls, 'Solar Profile')
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
+            temp_file.write(decoded)
+            temp_file_path = temp_file.name
 
-            # Save to the SQLite database
-            save_data(DATABASE_PATH, 'power_plants', power_plants_df)
-            save_data(DATABASE_PATH, 'buses', buses_df)
-            save_data(DATABASE_PATH, 'lines', lines_df)
-            save_data(DATABASE_PATH, 'demand_profile', demand_df)
-            save_data(DATABASE_PATH, 'storage_units', storage_units_df)
-            save_data(DATABASE_PATH, 'snapshots', snapshots_df)
-            save_data(DATABASE_PATH, 'wind_profile', wind_profile_df)
-            save_data(DATABASE_PATH, 'solar_profile', solar_profile_df)
+        # Load the uploaded Excel file into Pandas DataFrames
+        xls = pd.ExcelFile(temp_file_path)
+        
+        # Define expected sheets and their corresponding global DataFrame names for fallback
+        sheet_map = {
+            'Power Plants': 'power-plants',
+            'Buses': 'buses',
+            'Transmission Lines': 'lines',
+            'Demand Profile': 'demand-profile',
+            'Storage Units': 'storage-units',
+            'Snapshots': 'snapshots',
+            'Wind Profile': 'wind-profile',
+            'Solar Profile': 'solar-profile'
+        }
+        
+        store_outputs = {}
+        parse_errors = []
+
+        for sheet_name, store_id in sheet_map.items():
+            try:
+                df = pd.read_excel(xls, sheet_name)
+                # Special handling for date columns if necessary
+                if sheet_name == 'Demand Profile' and 'snapshot' in df.columns:
+                    df['snapshot'] = pd.to_datetime(df['snapshot']).dt.strftime('%Y-%m-%d %H:%M:%S')
+                if sheet_name == 'Snapshots' and 'snapshot_time' in df.columns:
+                    df['snapshot_time'] = pd.to_datetime(df['snapshot_time']).dt.strftime('%Y-%m-%d %H:%M:%S')
+                store_outputs[store_id] = df.to_dict('records')
+            except Exception as sheet_error:
+                parse_errors.append(f"Error parsing sheet '{sheet_name}': {sheet_error}")
+                store_outputs[store_id] = dash.no_update # Don't update store if sheet is bad
+        
+        if parse_errors:
+            feedback_message = dbc.Alert(f"File uploaded with errors: {'; '.join(parse_errors)}", color="warning")
+        else:
+            feedback_message = dbc.Alert(f"File '{filename}' uploaded and processed successfully.", color="success")
+
+        # Order of return values must match the order of Outputs
+        return [
+            feedback_message,
+            store_outputs.get('power-plants', dash.no_update),
+            store_outputs.get('buses', dash.no_update),
+            store_outputs.get('lines', dash.no_update),
+            store_outputs.get('demand-profile', dash.no_update),
+            store_outputs.get('storage-units', dash.no_update),
+            store_outputs.get('snapshots', dash.no_update),
+            store_outputs.get('wind-profile', dash.no_update),
+            store_outputs.get('solar-profile', dash.no_update)
+        ]
 
     except Exception as e:
-        print(f"Error loading uploaded network data: {e}")
-        raise PreventUpdate
+        print(f"Error processing uploaded network data: {e}")
+        return [dbc.Alert(f"Error processing file: {e}", color="danger")] + [dash.no_update] * 8
 
     finally:
-        # Clean up the temporary file
-        os.remove(temp_file_path)
-
-    return 1  # Signal that the save was successful
+        if temp_file_path and os.path.exists(temp_file_path):
+             os.remove(temp_file_path)
 
 
 # Callbacks to update capacities and display feedback in Dashboard
 @app.callback(
     [
-        Output('network-data', 'data')
+        Output('network-data', 'data'),
+        Output({'type': 'edited-table-store', 'index': 'power-plants'}, 'data', allow_duplicate=True)
     ],
     [
         Input('solar-slider', 'value'),
         Input('wind-slider', 'value'),
         Input('dsr-slider', 'value')
     ],
+    [
+        State({'type': 'edited-table-store', 'index': 'power-plants'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'buses'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'lines'}, 'data'),
+        State({'type': 'edited-table-store', 'index': 'storage-units'}, 'data')
+    ],
     prevent_initial_call=True
 )
-def update_generator_capacities(new_solar_capacity, new_wind_capacity, new_dsr_capacity):
+def update_generator_capacities(new_solar_capacity, new_wind_capacity, new_dsr_capacity,
+                                edited_power_plants_data, edited_buses_data,
+                                edited_lines_data, edited_storage_units_data):
     # Check if the callback context has triggered the callback
     if not ctx.triggered:
         raise PreventUpdate
 
-    power_plants_df = load_data_table(DATABASE_PATH, 'power_plants')
+    # Determine current power_plants_df (from store or global)
+    if edited_power_plants_data:
+        current_power_plants_df = pd.DataFrame(edited_power_plants_data)
+    else:
+        current_power_plants_df = power_plants_df.copy() # Use global df
 
-    # Calculate original capacities
-    solar_capacity = power_plants_df.loc[power_plants_df['type'] == 'Solar', 'capacity_mw'].sum()
-    wind_capacity = power_plants_df.loc[power_plants_df['type'] == 'Wind', 'capacity_mw'].sum()
-    dsr_capacity = power_plants_df.loc[power_plants_df['type'] == 'DSR', 'capacity_mw'].sum()
+    # Determine other DataFrames for network diagram (from store or global)
+    current_buses_df = pd.DataFrame(edited_buses_data) if edited_buses_data else buses_df.copy()
+    current_lines_df = pd.DataFrame(edited_lines_data) if edited_lines_data else lines_df.copy()
+    current_storage_units_df = pd.DataFrame(edited_storage_units_data) if edited_storage_units_data else storage_units_df.copy()
 
-    # TO ADD: code that handles the possibility that all solar/wind/DSR capacity has been set to zero
+
+    # Calculate original capacities from the current_power_plants_df
+    solar_capacity = current_power_plants_df.loc[current_power_plants_df['type'] == 'Solar', 'capacity_mw'].sum()
+    wind_capacity = current_power_plants_df.loc[current_power_plants_df['type'] == 'Wind', 'capacity_mw'].sum()
+    dsr_capacity = current_power_plants_df.loc[current_power_plants_df['type'] == 'DSR', 'capacity_mw'].sum()
+
+    # Handle cases where original capacity might be zero to avoid division by zero
+    if solar_capacity == 0 and new_solar_capacity > 0 :
+        print("Warning: Trying to scale solar capacity from 0. This is not yet fully supported by sliders.")
+        # Potentially raise PreventUpdate or handle by adding new generator assets
+    if wind_capacity == 0 and new_wind_capacity > 0:
+        print("Warning: Trying to scale wind capacity from 0. This is not yet fully supported by sliders.")
+    if dsr_capacity == 0 and new_dsr_capacity > 0:
+        print("Warning: Trying to scale DSR capacity from 0. This is not yet fully supported by sliders.")
 
     # Adjust solar capacities
-    solar_generators = power_plants_df[power_plants_df['type'] == 'Solar']
-    power_plants_df.loc[solar_generators.index, 'capacity_mw'] = \
-        solar_generators['capacity_mw'] * (new_solar_capacity * 1000 / solar_capacity)
+    if solar_capacity > 0:
+        solar_generators_idx = current_power_plants_df[current_power_plants_df['type'] == 'Solar'].index
+        current_power_plants_df.loc[solar_generators_idx, 'capacity_mw'] = \
+            current_power_plants_df.loc[solar_generators_idx, 'capacity_mw'] * (new_solar_capacity * 1000 / solar_capacity)
+    elif new_solar_capacity == 0: # If original is 0 and new is 0, or new is set to 0
+        solar_generators_idx = current_power_plants_df[current_power_plants_df['type'] == 'Solar'].index
+        current_power_plants_df.loc[solar_generators_idx, 'capacity_mw'] = 0
+
 
     # Adjust wind capacities
-    wind_generators = power_plants_df[power_plants_df['type'] == 'Wind']
-    power_plants_df.loc[wind_generators.index, 'capacity_mw'] = \
-        wind_generators['capacity_mw'] * (new_wind_capacity * 1000 / wind_capacity)
+    if wind_capacity > 0:
+        wind_generators_idx = current_power_plants_df[current_power_plants_df['type'] == 'Wind'].index
+        current_power_plants_df.loc[wind_generators_idx, 'capacity_mw'] = \
+            current_power_plants_df.loc[wind_generators_idx, 'capacity_mw'] * (new_wind_capacity * 1000 / wind_capacity)
+    elif new_wind_capacity == 0:
+        wind_generators_idx = current_power_plants_df[current_power_plants_df['type'] == 'Wind'].index
+        current_power_plants_df.loc[wind_generators_idx, 'capacity_mw'] = 0
 
     # Adjust dsr capacities
-    dsr_generators = power_plants_df[power_plants_df['type'] == 'DSR']
-    power_plants_df.loc[dsr_generators.index, 'capacity_mw'] = \
-        dsr_generators['capacity_mw'] * (new_dsr_capacity * 1000 / dsr_capacity)
+    if dsr_capacity > 0:
+        dsr_generators_idx = current_power_plants_df[current_power_plants_df['type'] == 'DSR'].index
+        current_power_plants_df.loc[dsr_generators_idx, 'capacity_mw'] = \
+            current_power_plants_df.loc[dsr_generators_idx, 'capacity_mw'] * (new_dsr_capacity * 1000 / dsr_capacity)
+    elif new_dsr_capacity == 0:
+        dsr_generators_idx = current_power_plants_df[current_power_plants_df['type'] == 'DSR'].index
+        current_power_plants_df.loc[dsr_generators_idx, 'capacity_mw'] = 0
+        
+    # Generate network data for diagram using potentially modified DataFrames
+    network_data_elements = get_network_elements_from_df(
+        DATABASE_PATH, # Still needed for fallback if a store is empty and global var not loaded
+        power_plants_df_override=current_power_plants_df,
+        buses_df_override=current_buses_df,
+        lines_df_override=current_lines_df,
+        storage_units_df_override=current_storage_units_df
+    )
 
-    # Save back to database
-    save_data(DATABASE_PATH, 'power_plants', power_plants_df)
-
-
-    network_data = get_network_elements_from_df(DATABASE_PATH)
-
-    return [network_data]
+    return network_data_elements, current_power_plants_df.to_dict('records')
 
 
 # Callbacks to draw graph on Dashboard

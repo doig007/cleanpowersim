@@ -86,4 +86,23 @@ This project is licensed under the MIT License. See the LICENSE file for more in
 ## Contact
 For any questions or suggestions, please contact james@doig.uk
 
+## Data Handling and User Sessions
+This application is designed to provide each user with a fresh, default dataset upon visiting the webpage. User-specific modifications to the data (e.g., through the Editor, Dashboard sliders, or file uploads) are maintained in-memory for the duration of their session and do not affect other users or the underlying default data.
+
+**Key Characteristics:**
+
+*   **Default Data Source:** The `power_system.db` SQLite database file serves as the master template for the default network data. It should be treated as read-only by the running web application. The script `setup_database.py` can be used to initialize or reset this database to its default state.
+*   **In-Memory Session Data:**
+    *   When the application starts, it loads the default data from `power_system.db` into global pandas DataFrames in memory.
+    *   User interactions that modify data (e.g., editing tables, adjusting sliders on the dashboard, uploading a new network data file) operate on copies of this data, stored within Dash `dcc.Store` components in the user's browser session.
+    *   These changes are isolated to the current user's session. Refreshing the page or starting a new session will revert to the clean, default dataset.
+*   **No Persistent User Changes:** Changes made by a user are not saved back to `power_system.db`. This ensures that every user visit starts with the same baseline data.
+*   **Data Download:** The "Download Network Data" feature allows users to download an Excel file representing the current state of their in-session data, including any modifications they've made.
+
+**Implications for Developers:**
+
+*   When adding new features that involve data modification, ensure that changes are made to the in-memory DataFrames (sourced from `dcc.Store`s or copies of the global defaults) and stored back into the appropriate `dcc.Store` for the session.
+*   Avoid any direct calls to `save_data(DATABASE_PATH, ...)` or other database write operations targeting `power_system.db` within the regular user interaction callbacks in `app.py`.
+*   The global DataFrames loaded at app startup (e.g., `app.power_plants_df`) should be treated as read-only defaults after initial load; always use `.copy()` if you need a mutable version based on these globals before storing it in a session store. Helper functions like `get_df_from_store_or_global` in `run_optimization_callback` demonstrate this pattern.
+
 

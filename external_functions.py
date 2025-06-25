@@ -152,27 +152,108 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
             print(f"Warning: Bus ID {bus_id_val} for storage unit '{storage_name_val}' not found in buses_df.")
 
     # Add transmission lines to the network
-    for _, row in lines_df.iterrows():
-        bus0_name = buses_df.loc[buses_df['id'] == int(row['from_bus']), 'name']
-        bus1_name = buses_df.loc[buses_df['id'] == int(row['to_bus']), 'name']
-        if not bus0_name.empty and not bus1_name.empty:
-            network.add(
-                "Line",
-                row["name"],
-                bus0=bus0_name.values[0],
-                bus1=bus1_name.values[0],
-                length=row["length_km"],
-                s_nom=1e6 if pd.isna(row["max_capacity_mw"]) else row["max_capacity_mw"],
-                r=row["r"],
-                x=row["x"],
-                carrier="AC",
-                overwrite=True
-            )
-        else:
-            print(f"Warning: Buses for line {row['name']} not found in buses_df (from_bus: {row['from_bus']}, to_bus: {row['to_bus']}).")
+    required_line_columns = ['from_bus', 'to_bus', 'name', 'length_km', 'max_capacity_mw', 'r', 'x']
+    missing_cols = [col for col in required_line_columns if col not in lines_df.columns]
+
+    if missing_cols:
+        print(f"WARNING: lines_df is missing essential columns for line processing: {', '.join(missing_cols)}. Skipping adding lines.")
+    elif lines_df.empty:
+        print("INFO: lines_df is empty. No lines to add.")
+    else:
+        for idx, row in lines_df.iterrows(): # Changed to idx, row for better warning messages
+            line_name = row.get('name', f"Line_UnknownID_{idx}")
+            from_bus_val = row.get('from_bus')
+            to_bus_val = row.get('to_bus')
+
+            # Validate essential identifiers
+            if pd.isna(from_bus_val) or pd.isna(to_bus_val):
+                print(f"Warning: Line '{line_name}' (Row index: {idx}) is missing 'from_bus' or 'to_bus' information. Skipping this line.")
+                continue
+
+            try:
+                from_bus_id_lookup = int(from_bus_val)
+                to_bus_id_lookup = int(to_bus_val)
+            except ValueError:
+                print(f"Warning: Line '{line_name}' (Row index: {idx}) has invalid (non-integer) 'from_bus' ('{from_bus_val}') or 'to_bus' ('{to_bus_val}') IDs. Skipping this line.")
+                continue
+
+            bus0_name_series = pd.Series(dtype=str)
+            if from_bus_id_lookup in buses_df['id'].unique():
+                bus0_name_series = buses_df.loc[buses_df['id'] == from_bus_id_lookup, 'name']
+
+            bus1_name_series = pd.Series(dtype=str)
+            if to_bus_id_lookup in buses_df['id'].unique():
+                bus1_name_series = buses_df.loc[buses_df['id'] == to_bus_id_lookup, 'name']
+
+            if not bus0_name_series.empty and not bus1_name_series.empty:
+                max_cap = row.get("max_capacity_mw")
+                # PyPSA uses s_nom for nominal power, s_max_pu for derating.
+                # If max_capacity_mw is None/NaN, s_nom might be set to a default by PyPSA or could be an issue.
+                # The original code used 1e6 as a large default if max_capacity_mw was NaN.
+                s_nom_val = 1e6 if pd.isna(max_cap) else max_cap
+
+                network.add(
+                    "Line",
+                    line_name,
+                    bus0=bus0_name_series.values[0],
+                    bus1=bus1_name_series.values[0],
+                    length=row.get("length_km", 0.0),
+                    s_nom=s_nom_val,
+                    r=row.get("r", 0.0),
+                    x=row.get("x", 0.0001), # Default x to a small positive non-zero value
+                    carrier="AC",
+                    overwrite=True
+                )
+            else:
+                missing_bus_info = []
+                if bus0_name_series.empty:
+                    missing_bus_info.append(f"from_bus ID '{from_bus_id_lookup}'")
+                if bus1_name_series.empty:
+                    missing_bus_info.append(f"to_bus ID '{to_bus_id_lookup}'")
+                print(f"Warning: For Line '{line_name}' (Row index: {idx}), one or more buses not found in buses_df: {'; '.join(missing_bus_info)}. Skipping this line.")
 
     # Add demand as loads to the network (now including snapshot timestamp)
-    demand_timeseries = demand_df.pivot(index='snapshot', columns='bus_id', values='demand_mw')
+    if demand_df.empty:
+        print("INFO: demand_df is empty. No loads to add based on demand profile.")
+        # Ensure network.loads DataFrame exists for later .replace call, even if empty
+        if "Load" not in network.components:
+             network.add("Load", "DummyLoadForSchema", bus=buses_df['name'].iloc[0] if not buses_df.empty else "Bus1", p_set=0) # Add then remove or ensure schema
+             if not buses_df.empty: # Only remove if dummy was added to a real bus
+                 network.remove("Load", "DummyLoadForSchema")
+             # Or, more directly, ensure the component DataFrame exists:
+             # network.loads = pd.DataFrame(columns=network.components["Load"]["attrs"]["type"].index)
+
+
+    demand_timeseries = pd.DataFrame() # Ensure it's defined
+    if not demand_df.empty and 'snapshot' in demand_df.columns and 'bus_id' in demand_df.columns and 'demand_mw' in demand_df.columns:
+        try:
+            demand_timeseries = demand_df.pivot(index='snapshot', columns='bus_id', values='demand_mw')
+
+            demand_timeseries.index = pd.to_datetime(demand_timeseries.index, dayfirst=True)
+            # network.snapshots should already be datetime from earlier processing
+            # network.snapshots = pd.to_datetime(network.snapshots, dayfirst=True) # Already done
+
+            demand_timeseries = demand_timeseries.reindex(network.snapshots).fillna(0)
+
+            for bus_id in demand_timeseries.columns:
+                # Ensure bus_id exists in buses_df['id'] before trying to get its name
+                if bus_id in buses_df['id'].unique():
+                    bus_name = buses_df.loc[buses_df['id'] == bus_id, 'name'].values[0]
+                    if pd.notna(bus_name): # bus_name should exist if bus_id was found
+                        network.add(
+                            "Load",
+                            f"Load_{bus_id}",
+                            bus=bus_name,
+                            p_set=demand_timeseries[bus_id]
+                        )
+                    # No else needed here, as bus_name should be found if bus_id is in unique IDs
+                else:
+                    print(f"Warning: Bus ID {bus_id} from demand_df not found in buses_df. Skipping load for this bus.")
+        except Exception as e:
+            print(f"ERROR: Could not process demand_df for loads: {e}")
+            print("INFO: Skipping load addition due to demand data processing error.")
+    elif not demand_df.empty:
+        print("WARNING: demand_df is not empty but missing required columns ('snapshot', 'bus_id', 'demand_mw') for pivoting. Skipping load addition.")
 
     # Ensure snapshot alignment
     demand_timeseries.index = pd.to_datetime(demand_timeseries.index, dayfirst=True)

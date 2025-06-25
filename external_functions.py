@@ -109,20 +109,47 @@ def create_network(power_plants_df, buses_df, lines_df, demand_df, storage_units
 
     # Add storage units to the network
     for _, row in storage_units_df.iterrows():
-        bus_name = buses_df.loc[buses_df['id'] == int(row['bus_id']), 'name']
-        if not bus_name.empty:
+        # Determine storage_name, handling potential KeyError if 'name' column is missing
+        storage_name_val = None
+        if 'name' in row.index and pd.notna(row['name']) and str(row['name']).strip():
+            storage_name_val = row['name']
+        else:
+            storage_id_val = row.get('id', 'UnknownID') # .get() is safe for potentially missing 'id' column
+            storage_name_val = f"StorageUnit_{storage_id_val}"
+            if 'name' not in row.index:
+                # This message is helpful if the entire column is missing.
+                # To avoid printing for every row if column is missing, this could be outside loop.
+                # For now, this provides context per problematic row.
+                print(f"Info: 'name' key missing for storage unit row (ID: '{storage_id_val}'). Using default name '{storage_name_val}'.")
+            elif pd.isna(row['name']) or not str(row['name']).strip():
+                print(f"Info: Empty name for storage unit ID '{storage_id_val}'. Using default name '{storage_name_val}'.")
+
+        bus_id_val = row.get('bus_id') # bus_id seems to exist based on traceback
+
+        bus_name_series = pd.Series(dtype=str) # Default to empty series
+        if bus_id_val is not None and pd.notna(bus_id_val):
+            try:
+                bus_id_lookup = int(bus_id_val)
+                # Check if bus_id_lookup exists in the 'id' column of buses_df
+                if bus_id_lookup in buses_df['id'].unique():
+                    bus_name_series = buses_df.loc[buses_df['id'] == bus_id_lookup, 'name']
+            except ValueError:
+                 print(f"Warning: bus_id '{bus_id_val}' for storage unit '{storage_name_val}' is not a valid integer.")
+
+        if not bus_name_series.empty:
             network.add(
                 "StorageUnit",
-                row["name"],
-                bus=bus_name.values[0],
-                p_nom=row["capacity_mw"],
-                e_nom=row["max_energy_mwh"],
-                efficiency_store=row["efficiency"],
-                efficiency_dispatch=row["efficiency"],
+                storage_name_val, # Use the determined/defaulted name
+                bus=bus_name_series.values[0],
+                p_nom=row.get("capacity_mw", 0), # Use .get for safety
+                e_nom=row.get("max_energy_mwh", 0), # Use .get for safety
+                efficiency_store=row.get("efficiency", 1.0), # Default efficiency
+                efficiency_dispatch=row.get("efficiency", 1.0), # Default efficiency
                 overwrite=True
             )
         else:
-            print(f"Warning: Bus ID {row['bus_id']} for storage unit {row['name']} not found in buses_df.")
+            # This is the original error location
+            print(f"Warning: Bus ID {bus_id_val} for storage unit '{storage_name_val}' not found in buses_df.")
 
     # Add transmission lines to the network
     for _, row in lines_df.iterrows():

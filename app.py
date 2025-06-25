@@ -67,6 +67,7 @@ app.layout = dbc.Container([
             ),
         ], width=9)  # Main content column
     ]),
+    dcc.Store(id='results-buffer-store', storage_type='memory'), # New store for results UI content
     dcc.Store(id='optimization-intent', data=False, storage_type='memory'),  # Track user intent to run optimization
     dcc.Interval(id="optimization-interval", interval=1000, n_intervals=0, disabled=True),  # Interval for updates
     dcc.Store(id='optimization-progress-store', data=0, storage_type='memory'),  # Store for progress updates
@@ -95,6 +96,8 @@ app.layout = dbc.Container([
      State('optimization-results', 'data')]
 )
 def update_page_content(pathname, optimization_intent, optimization_results):
+    if pathname == '/results':
+        print(f"LOG: update_page_content called for /results. Optimization intent: {optimization_intent}")
     return display_page(pathname, optimization_intent, optimization_results)
 
 @app.callback(
@@ -175,13 +178,14 @@ def navigate_to_results_and_set_intent(n_clicks, optimization_modal):
         Output('optimization-intent', 'data', allow_duplicate=True),  # Reset the intent after running
         Output('optimization-results', 'data', allow_duplicate=True),  # Store the results
         Output('optimization-interval', 'disabled', allow_duplicate=True), # Set the interval for async running of optimization
-        Output({'type': 'run-output', 'index': 'results'}, 'children', allow_duplicate=True), # Output to display the result of the optimization
-        Output({'type': 'dynamic-graphs-container', 'index': 'results'}, 'children', allow_duplicate=True), # Output to display the charts of the optimization result
+        Output('results-buffer-store', 'data'), # New output to buffer results UI content
         Output("optimization-modal", "is_open", allow_duplicate=True), # Close the modal after optimization
     ],
     [Input('optimization-intent', 'data')],
     [
-        State('url', 'pathname'), # Add pathname to check if on results page
+        # State('url', 'pathname') is no longer strictly needed here for the outputs we removed,
+        # but doesn't harm if other logic in this callback might use it. For now, let's remove it
+        # to simplify, as the new callback will handle pathname checking for UI updates.
         State({'type': 'edited-table-store', 'index': 'power-plants'}, 'data'),
         State({'type': 'edited-table-store', 'index': 'buses'}, 'data'),
         State({'type': 'edited-table-store', 'index': 'lines'}, 'data'),
@@ -193,11 +197,12 @@ def navigate_to_results_and_set_intent(n_clicks, optimization_modal):
     ],
     prevent_initial_call=True
 )
-def run_optimization_callback(optimization_intent, pathname,
+def run_optimization_callback(optimization_intent, # pathname removed from signature
                                edited_power_plants, edited_buses, edited_lines, 
                                edited_demand, edited_storage_units, edited_snapshots, 
                                edited_wind_profile, edited_solar_profile):
     global interval_disabled
+    print(f"LOG: run_optimization_callback triggered. optimization_intent: {optimization_intent}")
     # Access global DataFrames (loaded at app start)
     global power_plants_df, buses_df, lines_df, demand_df, storage_units_df, snapshots_df, wind_profile_df, solar_profile_df
 
@@ -242,27 +247,36 @@ def run_optimization_callback(optimization_intent, pathname,
             interval_disabled = True # disable interval as soon as result or exception occurs.
 
             charts_html = generate_result_charts(optimization_results)
-            run_output = "Optimization complete!"
-            # Only update page content if on the /results page
-            if pathname == '/results':
-                return False, optimization_results, interval_disabled, run_output, charts_html, False
-            else:
-                return False, optimization_results, interval_disabled, dash.no_update, dash.no_update, False
+            run_output_content = "Optimization complete!"
+            charts_html_content = generate_result_charts(optimization_results)
+
+            # Data for the results-buffer-store
+            results_buffer_data = {
+                'run_output_content': run_output_content,
+                'charts_html_content': charts_html_content
+            }
+            print(f"LOG: run_optimization_callback putting successful results into results-buffer-store: {results_buffer_data}")
+            # Reset intent, store raw results, update interval, send UI data to buffer, close modal
+            return False, optimization_results, interval_disabled, results_buffer_data, False
         else:
+            print("LOG: run_optimization_callback putting FAILED results into results-buffer-store")
             print("Optimization Failed.  Returning None")
             interval_disabled = True # disable interval as soon as result or exception occurs.
 
-            charts_html = "Charts will appear here once the model has finished optimization"
-            run_output = "Optimization model has failed."
-            # Only update page content if on the /results page
-            if pathname == '/results':
-                return False, None, interval_disabled, run_output, charts_html, True
-            else:
-                return False, None, interval_disabled, dash.no_update, dash.no_update, True
+            run_output_content = "Optimization model has failed."
+            charts_html_content = "Charts will appear here once the model has finished optimization" # Placeholder
+
+            results_buffer_data = {
+                'run_output_content': run_output_content,
+                'charts_html_content': charts_html_content
+            }
+            # Reset intent, clear raw results, update interval, send UI data to buffer, keep modal open for failure
+            return False, None, interval_disabled, results_buffer_data, True
 
     else:
         # If optimization_intent is False, none of these outputs should update.
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        # The results_buffer_store should also not be updated.
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
 
 # Callback to Update Logs and Fetch Results
@@ -303,6 +317,27 @@ def update_logs_and_fetch_results(n_intervals, current_output, current_results, 
 
     return progress, updated_output, current_results, interval_disabled
 
+
+# New callback to update results page UI from the buffer store
+@app.callback(
+    [Output({'type': 'run-output', 'index': 'results'}, 'children'),
+     Output({'type': 'dynamic-graphs-container', 'index': 'results'}, 'children')],
+    [Input('results-buffer-store', 'data')],
+    [State('url', 'pathname')],
+    prevent_initial_call=True
+)
+def update_results_ui_from_buffer(buffer_data, pathname):
+    print(f"LOG: update_results_ui_from_buffer triggered. Pathname: {pathname}. Buffer data: {buffer_data is not None}")
+    if not buffer_data or pathname != '/results':
+        # If no data in buffer, or not on results page, do nothing
+        if pathname != '/results' and buffer_data:
+            print("LOG: update_results_ui_from_buffer - not on /results page, so no UI update.")
+        return dash.no_update, dash.no_update
+
+    run_output_content = buffer_data.get('run_output_content', "Error: Content missing")
+    charts_html_content = buffer_data.get('charts_html_content', "Error: Charts missing")
+    print(f"LOG: update_results_ui_from_buffer IS UPDATING UI on /results page.")
+    return run_output_content, charts_html_content
 
 
 # Callback to close solver modal on button click

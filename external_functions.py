@@ -438,12 +438,23 @@ def run_optimization(network):
         logger.info("Starting network optimization...")
 
         try:
-            network.optimize(solver_name='cplex')
+            # Add a timeout, e.g., 5 minutes (300 seconds)
+            solver_options = {'timelimit': 300}
+            logger.info(f"Starting network optimization with solver options: {solver_options}...")
+            network.optimize(solver_name='cplex', solver_options=solver_options)
             logger.info("Optimization complete!")
             optimization_successful = True
-        except Exception as opt_error:  # Catch solver errors
+        except Exception as opt_error:  # Catch solver errors (incl. timeout if solver reports it as error)
             logger.exception("Error during optimization: %s", opt_error)
-            logger.debug("CPLEX log: %s", network.opt.get_log())  # Log CPLEX solver's internal log!
+            # Try to get CPLEX log if available
+            try:
+                cplex_log = network.opt.get_log()
+                if cplex_log: # Check if log is not empty or None
+                    logger.debug("CPLEX log: %s", cplex_log)
+            except AttributeError: # If network.opt or network.opt.get_log() doesn't exist
+                logger.debug("Could not retrieve CPLEX log (network.opt.get_log() not available).")
+            except Exception as log_exc: # Catch any other error during log retrieval
+                logger.debug(f"Exception while trying to retrieve CPLEX log: {log_exc}")
             optimization_successful = False  # Mark optimization as unsuccessful
             raise  # Re-raise the error for the main thread to handle
 

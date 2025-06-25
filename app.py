@@ -181,6 +181,7 @@ def navigate_to_results_and_set_intent(n_clicks, optimization_modal):
     ],
     [Input('optimization-intent', 'data')],
     [
+        State('url', 'pathname'), # Add pathname to check if on results page
         State({'type': 'edited-table-store', 'index': 'power-plants'}, 'data'),
         State({'type': 'edited-table-store', 'index': 'buses'}, 'data'),
         State({'type': 'edited-table-store', 'index': 'lines'}, 'data'),
@@ -192,7 +193,7 @@ def navigate_to_results_and_set_intent(n_clicks, optimization_modal):
     ],
     prevent_initial_call=True
 )
-def run_optimization_callback(optimization_intent, 
+def run_optimization_callback(optimization_intent, pathname,
                                edited_power_plants, edited_buses, edited_lines, 
                                edited_demand, edited_storage_units, edited_snapshots, 
                                edited_wind_profile, edited_solar_profile):
@@ -242,18 +243,25 @@ def run_optimization_callback(optimization_intent,
 
             charts_html = generate_result_charts(optimization_results)
             run_output = "Optimization complete!"
-
-            return False, optimization_results, interval_disabled, run_output, charts_html, False  # Return the actual result
+            # Only update page content if on the /results page
+            if pathname == '/results':
+                return False, optimization_results, interval_disabled, run_output, charts_html, False
+            else:
+                return False, optimization_results, interval_disabled, dash.no_update, dash.no_update, False
         else:
             print("Optimization Failed.  Returning None")
             interval_disabled = True # disable interval as soon as result or exception occurs.
 
             charts_html = "Charts will appear here once the model has finished optimization"
             run_output = "Optimization model has failed."
-
-            return False, None, interval_disabled, run_output, charts_html, True  # Return None which indicates error to callback
+            # Only update page content if on the /results page
+            if pathname == '/results':
+                return False, None, interval_disabled, run_output, charts_html, True
+            else:
+                return False, None, interval_disabled, dash.no_update, dash.no_update, True
 
     else:
+        # If optimization_intent is False, none of these outputs should update.
         return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
 
